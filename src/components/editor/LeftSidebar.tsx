@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { supabase } from '@/lib/supabase'
 import type { FinishType } from '@/types'
 import CatalogPanel from './CatalogPanel'
+import TemplatePanel from './TemplatePanel'
 
 const FINISH_SECTIONS: { type: FinishType; label: string }[] = [
   { type: 'wall', label: 'WALL' },
@@ -104,6 +105,12 @@ export default function LeftSidebar() {
         >
           Catalog
         </button>
+        <button
+          className={`sidebar-tab ${sidebarTab === 'templates' ? 'active' : ''}`}
+          onClick={() => setSidebarTab('templates')}
+        >
+          Templates
+        </button>
       </div>
 
       {/* Rooms Tab */}
@@ -168,6 +175,9 @@ export default function LeftSidebar() {
 
       {/* Catalog Tab */}
       {sidebarTab === 'catalog' && <CatalogPanel />}
+
+      {/* Templates Tab */}
+      {sidebarTab === 'templates' && <TemplatePanel />}
 
       {/* Finishes Tab */}
       {sidebarTab === 'finishes' && (

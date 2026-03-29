@@ -27,6 +27,8 @@ interface CanvasState {
 
   loadPlacedFurniture: (roomId: string) => Promise<void>
   savePlacedFurniture: () => Promise<void>
+  placeItems: (items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x: number; y: number; direction: Direction }>) => Promise<void>
+  clearRoomFurniture: (roomId: string) => Promise<void>
 
   setPlacementMode: (active: boolean, itemId?: string, variantId?: string) => void
   placeItem: (roomId: string, roomX: number, roomY: number) => Promise<void>
@@ -93,6 +95,49 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         .eq('id', item.id)
       if (error) console.error('savePlacedFurniture item error:', error)
     }
+  },
+
+  placeItems: async (items) => {
+    if (items.length === 0) return
+    const catalogState = useCatalogStore.getState()
+    const { placedFurniture } = get()
+    const rows = items.map((item, i) => {
+      const variants = catalogState.getVariantsForItem(item.furnitureItemId)
+      const variant = variants.find((v) => v.id === item.variantId)
+      return {
+        room_id: item.roomId,
+        furniture_item_id: item.furnitureItemId,
+        selected_variant_id: item.variantId,
+        x: item.x,
+        y: item.y,
+        direction: item.direction,
+        price_at_placement: variant?.price_thb ?? null,
+        sort_order: placedFurniture.length + i,
+      }
+    })
+    const { data, error } = await supabase
+      .from('placed_furniture')
+      .insert(rows)
+      .select()
+    if (error) {
+      console.error('placeItems:', error)
+      return
+    }
+    set((state) => ({
+      placedFurniture: [...state.placedFurniture, ...(data as PlacedFurniture[])],
+    }))
+  },
+
+  clearRoomFurniture: async (roomId) => {
+    const { error } = await supabase
+      .from('placed_furniture')
+      .delete()
+      .eq('room_id', roomId)
+    if (error) {
+      console.error('clearRoomFurniture:', error)
+      return
+    }
+    set({ placedFurniture: [], selectedItemId: null })
   },
 
   // ─── Placement ────────────────────────────────────────────────────────────

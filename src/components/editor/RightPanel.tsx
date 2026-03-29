@@ -3,8 +3,10 @@ import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus, Pencil, Rotat
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useUIStore } from '@/stores/useUIStore'
 import type { RoomGeometry, RoomDoor, RoomWindow, CurtainStyle } from '@/types'
 import { migrateFixtureWallIndex } from '@/lib/roomGeometry'
+import CostPanel from './CostPanel'
 
 export default function RightPanel() {
   const { rooms, selectedRoomId, updateRoom } = useProjectStore()
@@ -14,27 +16,38 @@ export default function RightPanel() {
   const placedFurniture = useCanvasStore((s) => s.placedFurniture)
   const selectedPlaced = placedFurniture.find((p) => p.id === selectedItemId)
 
-  if (selectedPlaced) {
-    return (
-      <div className="right-panel">
-        <FurnitureProperties placed={selectedPlaced} />
-        <style>{panelStyle}</style>
-      </div>
-    )
-  }
+  const rightPanelTab = useUIStore((s) => s.rightPanelTab)
+  const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
 
-  if (room) {
-    return (
-      <div className="right-panel">
-        <RoomProperties room={room} updateRoom={updateRoom} />
-        <style>{panelStyle}</style>
-      </div>
-    )
+  const renderProperties = () => {
+    if (selectedPlaced) return <FurnitureProperties placed={selectedPlaced} />
+    if (room) return <RoomProperties room={room} updateRoom={updateRoom} />
+    return <p className="empty-hint">Select a room to edit</p>
   }
 
   return (
-    <div className="right-panel right-panel--empty">
-      <p className="empty-hint">Select a room to edit</p>
+    <div className="right-panel">
+      {/* Tab Switcher */}
+      <div className="rp-tabs">
+        <button
+          className={`rp-tab ${rightPanelTab === 'properties' ? 'active' : ''}`}
+          onClick={() => setRightPanelTab('properties')}
+        >
+          Properties
+        </button>
+        <button
+          className={`rp-tab ${rightPanelTab === 'cost' ? 'active' : ''}`}
+          onClick={() => setRightPanelTab('cost')}
+        >
+          Cost
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      <div className="rp-content">
+        {rightPanelTab === 'properties' ? renderProperties() : <CostPanel />}
+      </div>
+
       <style>{panelStyle}</style>
     </div>
   )
@@ -529,18 +542,44 @@ const panelStyle = `
     display: flex;
     flex-direction: column;
     height: 100%;
+    overflow: hidden;
+  }
+  .rp-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--color-border-custom);
+    flex-shrink: 0;
+  }
+  .rp-tab {
+    flex: 1;
+    padding: 10px 0;
+    border: none;
+    background: none;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .rp-tab:hover {
+    color: var(--color-text-primary);
+  }
+  .rp-tab.active {
+    color: var(--color-primary-brand);
+    border-bottom-color: var(--color-primary-brand);
+  }
+  .rp-content {
+    flex: 1;
     overflow-y: auto;
     padding: 14px;
-    gap: 0;
-  }
-  .right-panel--empty {
-    align-items: center;
-    justify-content: center;
   }
   .empty-hint {
     font-size: 12px;
     color: var(--color-text-secondary);
     opacity: 0.6;
+    text-align: center;
+    padding-top: 40px;
   }
   .panel-section {
     padding: 12px 0;

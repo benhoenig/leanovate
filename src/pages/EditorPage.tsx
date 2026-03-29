@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useTemplateStore } from '@/stores/useTemplateStore'
 import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
 import IsometricCanvas from '@/components/editor/IsometricCanvas'
@@ -22,11 +23,12 @@ export default function EditorPage() {
 
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
 
-  // Load project on mount
+  // Load project + templates on mount
   useEffect(() => {
     if (!projectId) return
     loadProject(projectId)
     loadFinishMaterials()
+    useTemplateStore.getState().loadAllTemplates()
   }, [projectId, loadProject, loadFinishMaterials])
 
   // Load placed furniture when room changes
@@ -46,6 +48,19 @@ export default function EditorPage() {
         if (sprites.length === 0) {
           catalog.loadSpritesForVariant(item.selected_variant_id)
         }
+      }
+
+      // Check for price staleness
+      let staleCount = 0
+      for (const pf of placed) {
+        const variants = catalog.getVariantsForItem(pf.furniture_item_id)
+        const variant = variants.find((v) => v.id === pf.selected_variant_id)
+        if (pf.price_at_placement != null && variant?.price_thb != null && pf.price_at_placement !== variant.price_thb) {
+          staleCount++
+        }
+      }
+      if (staleCount > 0) {
+        showToast(`${staleCount} item${staleCount !== 1 ? 's have' : ' has'} price changes — check Cost tab`, 'warning')
       }
     })
   }, [selectedRoomId])

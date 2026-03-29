@@ -16,7 +16,7 @@ interface ProjectState {
   // Actions
   loadProjects: () => Promise<void>
   createProject: (name: string, description?: string) => Promise<{ id: string | null; error: string | null }>
-  updateProject: (id: string, updates: Partial<Pick<Project, 'name' | 'description' | 'status' | 'manual_costs'>>) => Promise<void>
+  updateProject: (id: string, updates: Partial<Pick<Project, 'name' | 'description' | 'status' | 'manual_costs' | 'unit_width_cm' | 'unit_height_cm'>>) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   loadProject: (id: string) => Promise<void>
   addRoom: (projectId: string, name: string) => Promise<{ id: string | null; error: string | null }>

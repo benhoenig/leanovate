@@ -190,3 +190,79 @@ export interface FinishMaterial {
   uploaded_by: string | null
   created_at: string
 }
+
+// --- Templates ---
+
+export interface UnitLayoutTemplate {
+  id: string
+  name: string
+  created_by: string
+  is_global: boolean
+  promoted_by: string | null
+  unit_width_cm: number
+  unit_height_cm: number
+  rooms_data: Array<{
+    name: string
+    x: number
+    y: number
+    width_cm: number
+    height_cm: number
+    ceiling_height_cm: number
+    geometry: RoomGeometry
+    finishes: RoomFinishes
+    sort_order: number
+  }>
+  created_at: string
+}
+
+export interface FurnitureLayoutSlot {
+  category_id: string
+  room_name: string
+  x: number
+  y: number
+  direction: Direction
+}
+
+export interface FurnitureLayoutTemplate {
+  id: string
+  name: string
+  created_by: string
+  is_global: boolean
+  promoted_by: string | null
+  layout_data: FurnitureLayoutSlot[]
+  compatible_unit_types: string[] | null
+  created_at: string
+}
+
+export interface DesignStyleItem {
+  category_id: string
+  furniture_item_id: string
+  variant_id: string
+  room_name: string
+  x: number
+  y: number
+  direction: Direction
+  price_at_save: number | null
+}
+
+export interface DesignStyleTemplate {
+  id: string
+  name: string
+  style_id: string
+  created_by: string
+  is_global: boolean
+  promoted_by: string | null
+  items_data: DesignStyleItem[]
+  created_at: string
+}
+
+// --- Staleness ---
+
+export interface StalenessAlert {
+  placed_furniture_id: string
+  furniture_item_name: string
+  variant_color_name: string
+  old_price: number | null
+  new_price: number | null
+  link_inactive: boolean
+}

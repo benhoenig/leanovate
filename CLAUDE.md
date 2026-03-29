@@ -19,11 +19,12 @@ Internal isometric room planner for an interior design team serving condo invest
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-Phase 5: Templates + Cost Summary
+Phase 6: Room Preview + Admin + Daily Recheck
 <!-- Phase 1: Foundation — COMPLETE (schema + storage buckets in supabase/migrations/20240101000000_full_schema.sql) -->
 <!-- Phase 2: Room Builder — COMPLETE -->
 <!-- Phase 4: Isometric Canvas — COMPLETE (furniture placement, drag, rotate, variant switch, room rotation, right panel properties) -->
 <!-- Phase 3: Furniture Catalog + AI Pipeline — COMPLETE (seed migration, useCatalogStore, CatalogPanel, AddFurnitureModal, ImageApprovalModal, 4 edge functions) -->
+<!-- Phase 5: Templates + Cost Summary — COMPLETE (3-layer templates, cost panel, staleness alerts) -->
 <!-- Update this line as you progress through phases. See docs/implementation-plan.md for phase details. -->
 
 ## Phase 2 Completion Notes
@@ -127,6 +128,49 @@ Full isometric canvas with furniture placement, drag, rotation, and variant swit
 - `handleSave` also calls `canvasStore.savePlacedFurniture()`
 - Placement mode badge in header ("Click on canvas to place — Esc to cancel")
 - Canvas cursor: `crosshair` in placement mode, `grabbing` when dragging
+
+## Phase 5 Completion Notes
+Full template system (3 layers) + cost summary panel with staleness alerts.
+
+### Template Store (`src/stores/useTemplateStore.ts`)
+- Full CRUD for all 3 template types: unit layout, furniture layout, design style
+- Save: snapshots current rooms/furniture from Project/Canvas/Catalog stores
+- Apply unit: deletes existing rooms, creates from template `rooms_data` snapshot
+- Apply furniture: auto-fills category slots with first approved item per category
+- Apply style: checks staleness first (price_at_save vs current price_thb, link_status), returns alerts array. If `force=true`, applies regardless
+- Regenerate: picks random approved items tagged with the style's style_id per category slot
+- Admin promote: `is_global = true, promoted_by = profile.id`
+- Cross-store access via `useXxxStore.getState()` (same pattern as Canvas Store)
+- Sequential Supabase operations (avoids concurrency issues)
+
+### Canvas Store Additions (`src/stores/useCanvasStore.ts`)
+- `placeItems(items[])` — batch `.insert([...])` to `placed_furniture` for template apply
+- `clearRoomFurniture(roomId)` — single `.delete().eq('room_id', roomId)` for regenerate
+
+### Cost Panel (`src/components/editor/CostPanel.tsx`)
+- Computed at render time from 3 stores (Canvas + Catalog + Project), never stored
+- Grand total card (gradient), furniture breakdown (per item), manual costs (editable key-value pairs)
+- Staleness detection: compares `price_at_placement` vs current variant `price_thb`
+- "Acknowledge All" button updates all stale items' `price_at_placement` via `switchVariant`
+
+### RightPanel Tab Switcher
+- Properties | Cost tabs at top, controlled by `useUIStore.rightPanelTab`
+- Properties tab: existing FurnitureProperties/RoomProperties content
+- Cost tab: CostPanel component
+
+### Template Panel (`src/components/editor/TemplatePanel.tsx`)
+- Left sidebar "Templates" tab (4th tab added to LeftSidebar)
+- Sub-tab pills: Unit | Furniture | Style (local state)
+- Template cards: name, personal/global badge, Apply button, admin Promote, Delete
+- Save form: inline name input + style picker (for design style templates)
+- Staleness Dialog (`StalenessDialog.tsx`): modal shown before applying stale style templates
+
+### Project-Open Staleness Check
+- EditorPage loads templates on mount via `useTemplateStore.getState().loadAllTemplates()`
+- After `loadPlacedFurniture`, compares prices and shows toast if stale items found
+
+### Project Store Update
+- `updateProject` type expanded to include `unit_width_cm | unit_height_cm` (needed by unit template apply)
 
 ## Code Style
 - TypeScript strict mode
