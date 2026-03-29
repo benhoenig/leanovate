@@ -47,29 +47,37 @@ export interface RoomFinishes {
   lighting?: { material_id: string | null; custom_url: string | null }
 }
 
-// --- Room Geometry (doors/windows on walls) ---
+// --- Room Geometry (polygon vertices + doors/windows on walls) ---
 
 export type PhysicalWall = 'north' | 'east' | 'south' | 'west'
 
+/** A 2D point in room-local metres. u = width axis, v = depth axis. */
+export interface RoomVertex {
+  u: number
+  v: number
+}
+
 export interface RoomDoor {
   id: string
-  wall: PhysicalWall
-  position: number  // 0-1 along the wall
-  width_m: number   // width in metres (default 0.8)
-  height_m?: number // height from floor in metres (default ~ceiling×0.82)
+  wall_index: number  // segment index into geometry.vertices
+  position: number    // 0-1 along the wall segment
+  width_m: number     // width in metres (default 0.8)
+  height_m?: number   // height from floor in metres (default ~ceiling×0.82)
+  wall?: PhysicalWall // DEPRECATED: kept for backward compat migration
 }
 
 export interface RoomWindow {
   id: string
-  wall: PhysicalWall
+  wall_index: number  // segment index into geometry.vertices
   position: number
-  width_m: number   // width in metres (default 1.0)
-  height_m?: number // window opening height in metres (default ~ceiling×0.48)
-  sill_m?: number   // sill height from floor in metres (default ~ceiling×0.30)
+  width_m: number     // width in metres (default 1.0)
+  height_m?: number   // window opening height in metres (default ~ceiling×0.48)
+  sill_m?: number     // sill height from floor in metres (default ~ceiling×0.30)
+  wall?: PhysicalWall // DEPRECATED: kept for backward compat migration
 }
 
 export interface RoomGeometry {
-  walls?: unknown[]
+  vertices?: RoomVertex[]  // CCW polygon. If absent → fallback to rectangle from width_cm/height_cm
   doors?: RoomDoor[]
   windows?: RoomWindow[]
 }

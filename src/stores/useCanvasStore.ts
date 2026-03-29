@@ -19,6 +19,10 @@ interface CanvasState {
   fixturePlacementType: 'door' | 'window' | null
   selectedFixtureId: string | null
 
+  // Shape edit mode
+  shapeEditMode: boolean
+  selectedVertexIndex: number | null
+
   // ─ Actions ──────────────────────────────────────────────────────────────
 
   loadPlacedFurniture: (roomId: string) => Promise<void>
@@ -40,6 +44,9 @@ interface CanvasState {
 
   setFixturePlacementMode: (type: 'door' | 'window' | null) => void
   setSelectedFixture: (id: string | null) => void
+
+  setShapeEditMode: (val: boolean) => void
+  setSelectedVertex: (idx: number | null) => void
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
@@ -52,6 +59,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   isDragging: false,
   fixturePlacementType: null,
   selectedFixtureId: null,
+  shapeEditMode: false,
+  selectedVertexIndex: null,
 
   // ─── Load / Save ──────────────────────────────────────────────────────────
 
@@ -231,4 +240,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     selectedFixtureId: id,
     selectedItemId: null,
   }),
+
+  // ─── Shape Edit Mode ──────────────────────────────────────────────────
+
+  setShapeEditMode: (val) => set({
+    shapeEditMode: val,
+    selectedVertexIndex: null,
+    selectedItemId: null,
+    selectedFixtureId: null,
+    placementMode: false,
+    fixturePlacementType: null,
+  }),
+
+  setSelectedVertex: (idx) => set({ selectedVertexIndex: idx }),
 }))

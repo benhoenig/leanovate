@@ -1,10 +1,16 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { Application, Graphics, Sprite, Texture, Container, Assets } from 'pixi.js'
-import type { Room, FinishMaterial, PlacedFurniture, Direction, PhysicalWall, RoomGeometry } from '@/types'
+import { Application, Graphics, Sprite, Texture, Container, Assets, Text } from 'pixi.js'
+import type { Room, FinishMaterial, PlacedFurniture, Direction, RoomGeometry, RoomVertex } from '@/types'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { supabase } from '@/lib/supabase'
+import {
+  getVertices, computeBoundingBox, pointInPolygon, nearestPointOnPolygon,
+  polygonCentroid, wallSegmentLength, rotateVertices, rotatePoint, unrotatePoint,
+  isWallVisible, isWallLeftFacing, migrateFixtureWallIndex,
+  computeFront, roomToScreen, screenToRoom,
+} from '@/lib/roomGeometry'
 
 interface Props {
   room: Room
@@ -17,61 +23,17 @@ const T = 64
 const SPRITE_SIZE = 512
 const DIRECTIONS: Direction[] = ['front_left', 'front_right', 'back_right', 'back_left']
 
-// ── Wall rotation mapping ────────────────────────────────────────────────────
-// Each room has 4 physical walls (north/east/south/west). Only 2 are visible
-// per rotation. This maps physical walls to screen walls with position transforms.
+// ── Visible wall info for hit testing ─────────────────────────────────────────
 
-interface ScreenWallMapping {
-  screenWall: 'left' | 'right'
-  toScreen: (t: number) => number
+interface VisibleWallInfo {
+  wallIndex: number
+  screenA: { x: number; y: number }
+  screenB: { x: number; y: number }
+  quad: { x: number; y: number }[]
+  lengthM: number
 }
 
-const WALL_SCREEN_MAP: Record<Direction, Partial<Record<PhysicalWall, ScreenWallMapping>>> = {
-  front_left: {
-    north: { screenWall: 'left',  toScreen: t => 1 - t },
-    east:  { screenWall: 'right', toScreen: t => 1 - t },
-  },
-  front_right: {
-    east:  { screenWall: 'left',  toScreen: t => t },
-    south: { screenWall: 'right', toScreen: t => 1 - t },
-  },
-  back_right: {
-    south: { screenWall: 'left',  toScreen: t => t },
-    west:  { screenWall: 'right', toScreen: t => t },
-  },
-  back_left: {
-    west:  { screenWall: 'left',  toScreen: t => 1 - t },
-    north: { screenWall: 'right', toScreen: t => t },
-  },
-}
-
-const SCREEN_TO_PHYSICAL: Record<Direction, {
-  left:  { wall: PhysicalWall; toPhysical: (ts: number) => number }
-  right: { wall: PhysicalWall; toPhysical: (ts: number) => number }
-}> = {
-  front_left: {
-    left:  { wall: 'north', toPhysical: ts => 1 - ts },
-    right: { wall: 'east',  toPhysical: ts => 1 - ts },
-  },
-  front_right: {
-    left:  { wall: 'east',  toPhysical: ts => ts },
-    right: { wall: 'south', toPhysical: ts => 1 - ts },
-  },
-  back_right: {
-    left:  { wall: 'south', toPhysical: ts => ts },
-    right: { wall: 'west',  toPhysical: ts => ts },
-  },
-  back_left: {
-    left:  { wall: 'west',  toPhysical: ts => 1 - ts },
-    right: { wall: 'north', toPhysical: ts => ts },
-  },
-}
-
-function physicalWallLength(wall: PhysicalWall, W: number, D: number): number {
-  return (wall === 'north' || wall === 'south') ? W : D
-}
-
-// ── Wall hit testing ─────────────────────────────────────────────────────────
+// ── Hit testing helpers ───────────────────────────────────────────────────────
 
 function pointInConvexQuad(px: number, py: number, q: { x: number; y: number }[]): boolean {
   let sign = 0
@@ -89,7 +51,9 @@ function projectOnSegment(
   ax: number, ay: number, bx: number, by: number,
 ): number {
   const dx = bx - ax, dy = by - ay
-  const t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+  const len2 = dx * dx + dy * dy
+  if (len2 === 0) return 0
+  const t = ((px - ax) * dx + (py - ay) * dy) / len2
   return Math.max(0, Math.min(1, t))
 }
 
@@ -129,50 +93,8 @@ function blendColor(base: number, overlay: number, amount: number): number {
   )
 }
 
-function computeFloorVertices(W: number, D: number, cx: number, cy: number) {
-  const fx = cx - (W - D) * T / 2
-  const fy = cy + (W + D) * T / 4
-  return {
-    front: { x: fx, y: fy },
-    right: { x: fx + W * T, y: fy - W * T / 2 },
-    back:  { x: fx + (W - D) * T, y: fy - (W + D) * T / 2 },
-    left:  { x: fx - D * T, y: fy - D * T / 2 },
-  }
-}
-
-function roomToScreen(u: number, v: number, front: { x: number; y: number }) {
-  return { sx: front.x + u * T - v * T, sy: front.y - u * T / 2 - v * T / 2 }
-}
-
-function screenToRoom(sx: number, sy: number, front: { x: number; y: number }) {
-  const dx = sx - front.x, dy = sy - front.y
-  return { u: (dx - 2 * dy) / (2 * T), v: (-dx - 2 * dy) / (2 * T) }
-}
-
 function apparentDirection(itemDir: Direction, rotation: Direction): Direction {
   return DIRECTIONS[(DIRECTIONS.indexOf(itemDir) + DIRECTIONS.indexOf(rotation)) % 4]
-}
-
-function transformForRotation(u: number, v: number, W: number, D: number, rot: Direction) {
-  switch (rot) {
-    case 'front_left':  return { u, v, effW: W, effD: D }
-    case 'front_right': return { u: D - v, v: u, effW: D, effD: W }
-    case 'back_right':  return { u: W - u, v: D - v, effW: W, effD: D }
-    case 'back_left':   return { u: v, v: W - u, effW: D, effD: W }
-  }
-}
-
-function screenToRoomRotated(
-  sx: number, sy: number, front: { x: number; y: number },
-  W: number, D: number, rot: Direction,
-) {
-  const raw = screenToRoom(sx, sy, front)
-  switch (rot) {
-    case 'front_left':  return raw
-    case 'front_right': return { u: raw.v, v: D - raw.u }
-    case 'back_right':  return { u: W - raw.u, v: D - raw.v }
-    case 'back_left':   return { u: W - raw.v, v: raw.u }
-  }
 }
 
 // ── Sprite helpers ────────────────────────────────────────────────────────────
@@ -190,14 +112,7 @@ function getFallbackUrl(variantId: string, itemId: string): string | null {
   return v?.clean_image_url ?? v?.original_image_url ?? null
 }
 
-// ── Room drawing ──────────────────────────────────────────────────────────────
-
-interface FloorVerts {
-  front: { x: number; y: number }
-  right: { x: number; y: number }
-  back:  { x: number; y: number }
-  left:  { x: number; y: number }
-}
+// ── Room drawing (polygon-based) ─────────────────────────────────────────────
 
 function drawRoomShell(
   container: Container, room: Room, materials: FinishMaterial[],
@@ -206,10 +121,19 @@ function drawRoomShell(
   selectedFixtureId?: string | null,
 ) {
   container.removeChildren()
-  const W = room.width_cm / 100, D = room.height_cm / 100
-  const { effW, effD } = transformForRotation(0, 0, W, D, rot)
+
+  // Get polygon vertices and rotate
+  const origVerts = getVertices(room)
+  const bboxW = Math.max(...origVerts.map(v => v.u)) - Math.min(...origVerts.map(v => v.u))
+  const bboxD = Math.max(...origVerts.map(v => v.v)) - Math.min(...origVerts.map(v => v.v))
+  const rotVerts = rotateVertices(origVerts, bboxW, bboxD, rot)
+
+  // Compute effective bounding box of rotated vertices
+  const effW = Math.max(...rotVerts.map(v => v.u)) - Math.min(...rotVerts.map(v => v.u))
+  const effD = Math.max(...rotVerts.map(v => v.v)) - Math.min(...rotVerts.map(v => v.v))
+
   const wallH = wallHeightPx(room.ceiling_height_cm)
-  const v = computeFloorVertices(effW, effD, cx, cy)
+  const front = computeFront(effW, effD, cx, cy)
 
   const wallColor  = getFinishColor(room, materials, 'wall', 0xECE9E4)
   const floorColor = getFinishColor(room, materials, 'floor', 0xD4CFC8)
@@ -218,47 +142,88 @@ function drawRoomShell(
   const lightColor = getFinishColor(room, materials, 'lighting', 0xFFE4A0)
   const stroke = { color: 0xB8B3AC, width: 1 }
 
-  // Left wall
-  const lw = new Graphics()
-  lw.poly([v.back.x, v.back.y, v.left.x, v.left.y, v.left.x, v.left.y - wallH, v.back.x, v.back.y - wallH])
-  lw.fill({ color: blendColor(wallColor, 0x000000, 0.10) }); lw.stroke(stroke)
-  container.addChild(lw)
+  // ── Find visible walls and sort back-to-front ─────────────────────────
+  const visibleWalls: VisibleWallInfo[] = []
+  for (let i = 0; i < rotVerts.length; i++) {
+    const a = rotVerts[i], b = rotVerts[(i + 1) % rotVerts.length]
+    // Use rotated vertices for visibility check (rotation is front_left in rotated space)
+    if (!isWallVisible(a, b, 'front_left')) continue
+    const sa = roomToScreen(a.u, a.v, front)
+    const sb = roomToScreen(b.u, b.v, front)
+    visibleWalls.push({
+      wallIndex: i,
+      screenA: { x: sa.sx, y: sa.sy },
+      screenB: { x: sb.sx, y: sb.sy },
+      quad: [
+        { x: sa.sx, y: sa.sy },
+        { x: sb.sx, y: sb.sy },
+        { x: sb.sx, y: sb.sy - wallH },
+        { x: sa.sx, y: sa.sy - wallH },
+      ],
+      lengthM: wallSegmentLength(origVerts[i], origVerts[(i + 1) % origVerts.length]),
+    })
+  }
 
-  // Right wall
-  const rw = new Graphics()
-  rw.poly([v.back.x, v.back.y, v.right.x, v.right.y, v.right.x, v.right.y - wallH, v.back.x, v.back.y - wallH])
-  rw.fill({ color: blendColor(wallColor, 0xFFFFFF, 0.10) }); rw.stroke(stroke)
-  container.addChild(rw)
+  // Sort by midpoint depth (smaller u+v = further back = draw first)
+  visibleWalls.sort((a, b) => {
+    const ai = a.wallIndex, bi = b.wallIndex
+    const midA = (rotVerts[ai].u + rotVerts[(ai + 1) % rotVerts.length].u) / 2 +
+                 (rotVerts[ai].v + rotVerts[(ai + 1) % rotVerts.length].v) / 2
+    const midB = (rotVerts[bi].u + rotVerts[(bi + 1) % rotVerts.length].u) / 2 +
+                 (rotVerts[bi].v + rotVerts[(bi + 1) % rotVerts.length].v) / 2
+    return midA - midB
+  })
 
-  // Floor
+  // ── Draw walls (back to front) ────────────────────────────────────────
+  for (const wall of visibleWalls) {
+    const origA = origVerts[wall.wallIndex]
+    const origB = origVerts[(wall.wallIndex + 1) % origVerts.length]
+    const leftFacing = isWallLeftFacing(origA, origB)
+    const shade = leftFacing
+      ? blendColor(wallColor, 0x000000, 0.10)
+      : blendColor(wallColor, 0xFFFFFF, 0.10)
+
+    const g = new Graphics()
+    g.poly([
+      wall.screenA.x, wall.screenA.y,
+      wall.screenB.x, wall.screenB.y,
+      wall.screenB.x, wall.screenB.y - wallH,
+      wall.screenA.x, wall.screenA.y - wallH,
+    ])
+    g.fill({ color: shade }); g.stroke(stroke)
+    container.addChild(g)
+  }
+
+  // ── Draw floor polygon ────────────────────────────────────────────────
   const fl = new Graphics()
-  fl.poly([v.front.x, v.front.y, v.right.x, v.right.y, v.back.x, v.back.y, v.left.x, v.left.y])
+  const floorPts: number[] = []
+  for (const v of rotVerts) {
+    const s = roomToScreen(v.u, v.v, front)
+    floorPts.push(s.sx, s.sy)
+  }
+  fl.poly(floorPts)
   fl.fill({ color: floorColor }); fl.stroke(stroke)
   container.addChild(fl)
 
-  // ── Render fixtures from geometry ─────────────────────────────────────
+  // ── Render fixtures on visible walls ──────────────────────────────────
   const geo = room.geometry as RoomGeometry
   const doors = geo?.doors ?? []
   const windows = geo?.windows ?? []
-  const wallMap = WALL_SCREEN_MAP[rot]
-
-  const pxPerM = T * 0.6 // wall pixel-per-metre (matches wallHeightPx formula)
+  const pxPerM = T * 0.6
 
   const renderFixture = (
-    id: string, wall: PhysicalWall, position: number, widthM: number,
+    id: string, wallIndex: number, position: number, widthM: number,
     type: 'door' | 'window', heightM?: number, sillM?: number,
   ) => {
-    const mapping = wallMap[wall]
-    if (!mapping) return // not visible in this rotation
-    const wLen = physicalWallLength(wall, W, D)
-    const halfT = (widthM / 2) / wLen
-    const screenCenter = mapping.toScreen(position)
-    const t0 = Math.max(0.02, screenCenter - halfT)
-    const t1 = Math.min(0.98, screenCenter + halfT)
-    const wallStart = v.back
-    const wallEnd = mapping.screenWall === 'left' ? v.left : v.right
-    const bl = lerp(wallStart, wallEnd, t0)
-    const br = lerp(wallStart, wallEnd, t1)
+    // Find this wall in visible walls
+    const vw = visibleWalls.find(w => w.wallIndex === wallIndex)
+    if (!vw) return // not visible in this rotation
+
+    const halfT = (widthM / 2) / vw.lengthM
+    const t0 = Math.max(0.02, position - halfT)
+    const t1 = Math.min(0.98, position + halfT)
+    const bl = lerp(vw.screenA, vw.screenB, t0)
+    const br = lerp(vw.screenA, vw.screenB, t1)
 
     const isSelected = id === selectedFixtureId
 
@@ -292,16 +257,26 @@ function drawRoomShell(
     }
   }
 
-  for (const door of doors) renderFixture(door.id, door.wall, door.position, door.width_m, 'door', door.height_m)
-  for (const win of windows) renderFixture(win.id, win.wall, win.position, win.width_m, 'window', win.height_m, win.sill_m)
+  for (const door of doors) {
+    const wi = migrateFixtureWallIndex(door)
+    renderFixture(door.id, wi, door.position, door.width_m, 'door', door.height_m)
+  }
+  for (const win of windows) {
+    const wi = migrateFixtureWallIndex(win)
+    renderFixture(win.id, wi, win.position, win.width_m, 'window', win.height_m, win.sill_m)
+  }
 
-  // Light
-  const glow = new Graphics(); glow.circle(cx, cy - wallH, 22); glow.fill({ color: lightColor, alpha: 0.18 })
-  container.addChild(glow)
-  const fix = new Graphics(); fix.circle(cx, cy - wallH, 5); fix.fill({ color: lightColor })
-  fix.stroke({ color: blendColor(lightColor, 0x000000, 0.30), width: 1 }); container.addChild(fix)
+  // ── Lighting at polygon centroid ──────────────────────────────────────
+  const centroid = polygonCentroid(rotVerts)
+  const cScreen = roomToScreen(centroid.u, centroid.v, front)
+  const glow = new Graphics(); glow.circle(cScreen.sx, cScreen.sy - wallH, 22)
+  glow.fill({ color: lightColor, alpha: 0.18 }); container.addChild(glow)
+  const fix = new Graphics(); fix.circle(cScreen.sx, cScreen.sy - wallH, 5)
+  fix.fill({ color: lightColor })
+  fix.stroke({ color: blendColor(lightColor, 0x000000, 0.30), width: 1 })
+  container.addChild(fix)
 
-  return { front: v.front, effW, effD, verts: v, wallH }
+  return { front, wallH, visibleWalls, rotatedVertices: rotVerts, bboxW, bboxD }
 }
 
 // ── Furniture drawing ─────────────────────────────────────────────────────────
@@ -336,17 +311,17 @@ async function drawFurnitureLayer(
   items: PlacedFurniture[],
   rot: Direction,
   front: { x: number; y: number },
-  W: number, D: number,
+  bboxW: number, bboxD: number,
   selectedId: string | null,
   onSelect: (id: string) => void,
   onDragStart: (id: string) => void,
 ) {
   container.removeChildren()
 
-  // Depth sort: back items first
+  // Depth sort: back items first (smaller u+v in rotated space)
   const sorted = [...items].sort((a, b) => {
-    const at = transformForRotation(a.x, a.y, W, D, rot)
-    const bt = transformForRotation(b.x, b.y, W, D, rot)
+    const at = rotatePoint(a.x, a.y, bboxW, bboxD, rot)
+    const bt = rotatePoint(b.x, b.y, bboxW, bboxD, rot)
     return (at.u + at.v) - (bt.u + bt.v)
   })
 
@@ -363,8 +338,8 @@ async function drawFurnitureLayer(
     spr.anchor.set(0.5, 0.85)
     spr.scale.set(getItemScale(item.furniture_item_id, item.selected_variant_id))
 
-    const t = transformForRotation(item.x, item.y, W, D, rot)
-    const pos = roomToScreen(t.u, t.v, front)
+    const rp = rotatePoint(item.x, item.y, bboxW, bboxD, rot)
+    const pos = roomToScreen(rp.u, rp.v, front)
     spr.position.set(pos.sx, pos.sy)
 
     spr.eventMode = 'static'
@@ -398,17 +373,34 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
   const appRef = useRef<Application | null>(null)
   const roomLayerRef = useRef<Container | null>(null)
   const furnitureLayerRef = useRef<Container | null>(null)
+  const shapeLayerRef = useRef<Container | null>(null)
   const ghostRef = useRef<Sprite | null>(null)
   const frontRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
-  const dimsRef = useRef<{ W: number; D: number }>({ W: 3, D: 3 })
-  const floorVertsRef = useRef<FloorVerts | null>(null)
+  const bboxRef = useRef<{ W: number; D: number }>({ W: 3, D: 3 })
   const wallHRef = useRef(0)
+  const visibleWallsRef = useRef<VisibleWallInfo[]>([])
+  const rotatedVertsRef = useRef<RoomVertex[]>([])
 
   const dragRef = useRef<{ active: boolean; itemId: string | null }>({
     active: false, itemId: null,
   })
   const fixtureDragRef = useRef<{
     active: boolean; fixtureId: string; type: 'door' | 'window'; originalGeo: RoomGeometry
+  } | null>(null)
+  const vertexDragRef = useRef<{ active: boolean; vertexIndex: number } | null>(null)
+  const wallDragRef = useRef<{
+    active: boolean
+    insertedIdx1: number       // index of first inserted vertex (A')
+    insertedIdx2: number       // index of second inserted vertex (B')
+    normalU: number
+    normalV: number
+    startA: RoomVertex         // initial position of A' (same as original corner A)
+    startB: RoomVertex         // initial position of B' (same as original corner B)
+    startMouseU: number
+    startMouseV: number
+    originalGeo: RoomGeometry  // for undo if no movement
+    originalWidthCm: number
+    originalHeightCm: number
   } | null>(null)
 
   const roomRef = useRef(room)
@@ -427,7 +419,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
     const cx = sw / 2, cy = sh / 2 + wallH / 2
     const state = useCanvasStore.getState()
 
-    const { front, verts, wallH: wH } = drawRoomShell(
+    const result = drawRoomShell(
       rl, roomRef.current, matsRef.current, state.roomRotation, cx, cy,
       (id) => {
         // Sims-style: click fixture to pick it up; click again to place
@@ -449,14 +441,16 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       },
       state.selectedFixtureId,
     )
-    frontRef.current = front
-    floorVertsRef.current = verts
-    wallHRef.current = wH
-    dimsRef.current = { W: roomRef.current.width_cm / 100, D: roomRef.current.height_cm / 100 }
+
+    frontRef.current = result.front
+    visibleWallsRef.current = result.visibleWalls
+    rotatedVertsRef.current = result.rotatedVertices
+    wallHRef.current = result.wallH
+    bboxRef.current = { W: result.bboxW, D: result.bboxD }
 
     await drawFurnitureLayer(
       fl, state.placedFurniture, state.roomRotation,
-      front, dimsRef.current.W, dimsRef.current.D,
+      result.front, result.bboxW, result.bboxD,
       state.selectedItemId,
       (id) => {
         if (fixtureDragRef.current?.active) {
@@ -474,6 +468,203 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         state.setDragging(true)
       },
     )
+
+    // ── Shape edit handles ──────────────────────────────────────────────
+    const sl = shapeLayerRef.current
+    if (sl) {
+      sl.removeChildren()
+      if (state.shapeEditMode) {
+        const origVerts = getVertices(roomRef.current)
+        const rotVerts = result.rotatedVertices
+
+        // Draw wall segment hit areas (for wall push/pull drag — lowest priority)
+        for (let i = 0; i < rotVerts.length; i++) {
+          const a = rotVerts[i], b = rotVerts[(i + 1) % rotVerts.length]
+          const sa = roomToScreen(a.u, a.v, result.front)
+          const sb = roomToScreen(b.u, b.v, result.front)
+
+          // Build a thin quad along the wall for hit detection (12px wide)
+          const dx = sb.sx - sa.sx, dy = sb.sy - sa.sy
+          const len = Math.sqrt(dx * dx + dy * dy)
+          if (len === 0) continue
+          const nx = -dy / len * 6, ny = dx / len * 6
+
+          const wg = new Graphics()
+          wg.poly([
+            sa.sx + nx, sa.sy + ny,
+            sb.sx + nx, sb.sy + ny,
+            sb.sx - nx, sb.sy - ny,
+            sa.sx - nx, sa.sy - ny,
+          ])
+          wg.fill({ color: 0x2BA8A0, alpha: 0.12 })
+          wg.eventMode = 'static'
+          wg.cursor = 'grab'
+          wg.on('pointerover', () => { wg.tint = 0xFFFFFF; wg.alpha = 2.5 })
+          wg.on('pointerout', () => { wg.alpha = 1.0 })
+
+          const segIdx = i
+          wg.on('pointerdown', (ev: { stopPropagation: () => void; global: { x: number; y: number } }) => {
+            ev.stopPropagation()
+            const oa = origVerts[segIdx]
+            const ob = origVerts[(segIdx + 1) % origVerts.length]
+            const wdu = ob.u - oa.u, wdv = ob.v - oa.v
+            const wlen = Math.sqrt(wdu * wdu + wdv * wdv)
+            if (wlen === 0) return
+            // Outward normal for CCW winding
+            const normalU = wdv / wlen
+            const normalV = -wdu / wlen
+
+            const cs = useCanvasStore.getState()
+            const mouseRoom = screenToRoom(ev.global.x, ev.global.y, frontRef.current)
+            const mouseOrig = unrotatePoint(mouseRoom.u, mouseRoom.v, bboxRef.current.W, bboxRef.current.D, cs.roomRotation)
+
+            // Save original geometry for undo
+            const geo = roomRef.current.geometry as RoomGeometry
+            const origGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
+
+            // Insert 2 new vertices after segIdx (initially at A and B positions)
+            // Wall A→B becomes: A → A'(new) → B'(new) → B
+            const newVerts = [...origVerts]
+            newVerts.splice(segIdx + 1, 0, { ...oa }, { ...ob })
+
+            // Remap fixture wall_index values to account for 2 inserted vertices
+            const newGeo: RoomGeometry = { ...geo, vertices: newVerts }
+            if (newGeo.doors) {
+              newGeo.doors = newGeo.doors.map(d => {
+                const wi = migrateFixtureWallIndex(d)
+                if (wi === segIdx) return { ...d, wall_index: segIdx + 1 }
+                if (wi > segIdx) return { ...d, wall_index: wi + 2 }
+                return d
+              })
+            }
+            if (newGeo.windows) {
+              newGeo.windows = newGeo.windows.map(w => {
+                const wi = migrateFixtureWallIndex(w)
+                if (wi === segIdx) return { ...w, wall_index: segIdx + 1 }
+                if (wi > segIdx) return { ...w, wall_index: wi + 2 }
+                return w
+              })
+            }
+
+            // Update ref immediately (visual stays same since A'=A, B'=B)
+            const bbox = computeBoundingBox(newVerts)
+            roomRef.current = { ...roomRef.current, geometry: newGeo, width_cm: bbox.width_cm, height_cm: bbox.height_cm }
+
+            wallDragRef.current = {
+              active: true,
+              insertedIdx1: segIdx + 1,
+              insertedIdx2: segIdx + 2,
+              normalU, normalV,
+              startA: { ...oa },
+              startB: { ...ob },
+              startMouseU: mouseOrig.u,
+              startMouseV: mouseOrig.v,
+              originalGeo: origGeo,
+              originalWidthCm: roomRef.current.width_cm,
+              originalHeightCm: roomRef.current.height_cm,
+            }
+            cs.setSelectedVertex(null)
+          })
+          sl.addChild(wg)
+        }
+
+        // Draw wall dimension labels
+        const centroid = polygonCentroid(rotVerts)
+        const centroidScreen = roomToScreen(centroid.u, centroid.v, result.front)
+        for (let i = 0; i < rotVerts.length; i++) {
+          const a = rotVerts[i], b = rotVerts[(i + 1) % rotVerts.length]
+          const sa = roomToScreen(a.u, a.v, result.front)
+          const sb = roomToScreen(b.u, b.v, result.front)
+          const lenM = wallSegmentLength(origVerts[i], origVerts[(i + 1) % origVerts.length])
+          const lenCm = Math.round(lenM * 100)
+
+          const mx = (sa.sx + sb.sx) / 2, my = (sa.sy + sb.sy) / 2
+          const dx = sb.sx - sa.sx, dy = sb.sy - sa.sy
+          const slen = Math.sqrt(dx * dx + dy * dy)
+          if (slen < 1) continue
+
+          // Perpendicular offset pointing away from polygon centroid
+          const n1x = -dy / slen, n1y = dx / slen
+          const toC = (centroidScreen.sx - mx) * n1x + (centroidScreen.sy - my) * n1y
+          const off = 16
+          const nx = toC < 0 ? n1x * off : -n1x * off
+          const ny = toC < 0 ? n1y * off : -n1y * off
+
+          // Background pill
+          const labelText = `${lenCm} cm`
+          const pillW = labelText.length * 6.5 + 10, pillH = 16
+          const bg = new Graphics()
+          bg.roundRect(mx + nx - pillW / 2, my + ny - pillH / 2, pillW, pillH, 4)
+          bg.fill({ color: 0xFFFFFF, alpha: 0.88 })
+          bg.stroke({ color: 0xE8E5E0, width: 0.5 })
+          bg.eventMode = 'none'
+          sl.addChild(bg)
+
+          const label = new Text({
+            text: labelText,
+            style: { fontSize: 10, fontFamily: 'Inter, sans-serif', fill: 0x555555, fontWeight: '600' },
+          })
+          label.anchor.set(0.5, 0.5)
+          label.position.set(mx + nx, my + ny)
+          label.eventMode = 'none'
+          sl.addChild(label)
+        }
+
+        // Draw midpoint handles (+ buttons to add vertex)
+        for (let i = 0; i < rotVerts.length; i++) {
+          const a = rotVerts[i], b = rotVerts[(i + 1) % rotVerts.length]
+          const midU = (a.u + b.u) / 2, midV = (a.v + b.v) / 2
+          const ms = roomToScreen(midU, midV, result.front)
+          const mp = new Graphics()
+          mp.circle(ms.sx, ms.sy, 7)
+          mp.fill({ color: 0xFFFFFF, alpha: 0.9 })
+          mp.stroke({ color: 0x2BA8A0, width: 1.5 })
+          // Draw + sign
+          const pl = new Graphics()
+          pl.moveTo(ms.sx - 3, ms.sy); pl.lineTo(ms.sx + 3, ms.sy)
+          pl.moveTo(ms.sx, ms.sy - 3); pl.lineTo(ms.sx, ms.sy + 3)
+          pl.stroke({ color: 0x2BA8A0, width: 1.5 })
+          mp.eventMode = 'static'; mp.cursor = 'pointer'
+          const segIdx = i
+          mp.on('pointerdown', (ev: { stopPropagation: () => void }) => {
+            ev.stopPropagation()
+            // Insert a new vertex at the midpoint of this segment
+            const newVerts = [...origVerts]
+            const oa = origVerts[segIdx], ob = origVerts[(segIdx + 1) % origVerts.length]
+            const newVert = { u: Math.round(((oa.u + ob.u) / 2) * 10) / 10, v: Math.round(((oa.v + ob.v) / 2) * 10) / 10 }
+            newVerts.splice(segIdx + 1, 0, newVert)
+            const bbox = computeBoundingBox(newVerts)
+            const newGeo = { ...(roomRef.current.geometry as RoomGeometry), vertices: newVerts }
+            useProjectStore.getState().updateRoom(roomRef.current.id, {
+              geometry: newGeo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
+            })
+            // Start dragging the new vertex
+            useCanvasStore.getState().setSelectedVertex(segIdx + 1)
+            vertexDragRef.current = { active: true, vertexIndex: segIdx + 1 }
+          })
+          sl.addChild(mp); sl.addChild(pl)
+        }
+
+        // Draw vertex handles
+        for (let i = 0; i < rotVerts.length; i++) {
+          const rv = rotVerts[i]
+          const vs = roomToScreen(rv.u, rv.v, result.front)
+          const isSelected = state.selectedVertexIndex === i
+          const vh = new Graphics()
+          vh.circle(vs.sx, vs.sy, isSelected ? 8 : 6)
+          vh.fill({ color: isSelected ? 0x2BA8A0 : 0xFFFFFF })
+          vh.stroke({ color: 0x2BA8A0, width: 2 })
+          vh.eventMode = 'static'; vh.cursor = 'grab'
+          const vIdx = i
+          vh.on('pointerdown', (ev: { stopPropagation: () => void }) => {
+            ev.stopPropagation()
+            useCanvasStore.getState().setSelectedVertex(vIdx)
+            vertexDragRef.current = { active: true, vertexIndex: vIdx }
+          })
+          sl.addChild(vh)
+        }
+      }
+    }
   }, [])
 
   // Subscribe to canvas store
@@ -499,14 +690,14 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       el.appendChild(app.canvas)
       appRef.current = app
 
-      const rl = new Container(); const fl = new Container()
-      app.stage.addChild(rl); app.stage.addChild(fl)
-      roomLayerRef.current = rl; furnitureLayerRef.current = fl
+      const rl = new Container(); const fl = new Container(); const sl = new Container()
+      app.stage.addChild(rl); app.stage.addChild(fl); app.stage.addChild(sl)
+      roomLayerRef.current = rl; furnitureLayerRef.current = fl; shapeLayerRef.current = sl
 
       app.stage.eventMode = 'static'
       app.stage.hitArea = app.screen
 
-      // Stage click: place furniture, place fixture, or deselect
+      // ── Stage click: place furniture, place fixture, or deselect ────
       app.stage.on('pointerdown', (e) => {
         const s = useCanvasStore.getState()
         const p = e.global
@@ -520,62 +711,39 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
 
         // Furniture placement mode
         if (s.placementMode) {
-          const { u, v } = screenToRoomRotated(
-            p.x, p.y, frontRef.current, dimsRef.current.W, dimsRef.current.D, s.roomRotation,
-          )
-          s.placeItem(
-            roomRef.current.id,
-            Math.max(0.1, Math.min(dimsRef.current.W - 0.1, u)),
-            Math.max(0.1, Math.min(dimsRef.current.D - 0.1, v)),
-          )
+          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
+          const verts = getVertices(roomRef.current)
+          if (pointInPolygon(orig.u, orig.v, verts)) {
+            s.placeItem(roomRef.current.id, orig.u, orig.v)
+          }
           return
         }
 
         // Fixture placement mode (door/window)
-        if (s.fixturePlacementType && floorVertsRef.current) {
-          const fv = floorVertsRef.current
-          const wH = wallHRef.current
+        if (s.fixturePlacementType && visibleWallsRef.current.length > 0) {
           const px = p.x, py = p.y
+          for (const vw of visibleWallsRef.current) {
+            if (pointInConvexQuad(px, py, vw.quad)) {
+              const screenPos = projectOnSegment(px, py, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
+              const defaultWidth = s.fixturePlacementType === 'door' ? 0.8 : 1.0
+              const halfT = (defaultWidth / 2) / vw.lengthM
+              const clampedPos = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, screenPos))
 
-          // Check left wall quad
-          const leftQuad = [
-            fv.back, fv.left,
-            { x: fv.left.x, y: fv.left.y - wH },
-            { x: fv.back.x, y: fv.back.y - wH },
-          ]
-          // Check right wall quad
-          const rightQuad = [
-            fv.back, fv.right,
-            { x: fv.right.x, y: fv.right.y - wH },
-            { x: fv.back.x, y: fv.back.y - wH },
-          ]
-
-          let screenWall: 'left' | 'right' | null = null
-          if (pointInConvexQuad(px, py, leftQuad)) screenWall = 'left'
-          else if (pointInConvexQuad(px, py, rightQuad)) screenWall = 'right'
-
-          if (screenWall) {
-            const wallEnd = screenWall === 'left' ? fv.left : fv.right
-            const screenPos = projectOnSegment(px, py, fv.back.x, fv.back.y, wallEnd.x, wallEnd.y)
-            const inverse = SCREEN_TO_PHYSICAL[s.roomRotation][screenWall]
-            const physPos = inverse.toPhysical(screenPos)
-            const wLen = physicalWallLength(inverse.wall, dimsRef.current.W, dimsRef.current.D)
-            const defaultWidth = s.fixturePlacementType === 'door' ? 0.8 : 1.0
-            const halfT = (defaultWidth / 2) / wLen
-            const clampedPos = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, physPos))
-
-            const newFixture = {
-              id: crypto.randomUUID(),
-              wall: inverse.wall,
-              position: clampedPos,
-              width_m: defaultWidth,
+              const newFixture = {
+                id: crypto.randomUUID(),
+                wall_index: vw.wallIndex,
+                position: clampedPos,
+                width_m: defaultWidth,
+              }
+              const geo = roomRef.current.geometry as RoomGeometry
+              const newGeo = s.fixturePlacementType === 'door'
+                ? { ...geo, doors: [...(geo.doors ?? []), newFixture] }
+                : { ...geo, windows: [...(geo.windows ?? []), newFixture] }
+              useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: newGeo })
+              s.setFixturePlacementMode(null)
+              break
             }
-            const geo = roomRef.current.geometry as RoomGeometry
-            const newGeo = s.fixturePlacementType === 'door'
-              ? { ...geo, doors: [...(geo.doors ?? []), newFixture] }
-              : { ...geo, windows: [...(geo.windows ?? []), newFixture] }
-            useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: newGeo })
-            s.setFixturePlacementMode(null)
           }
           return
         }
@@ -586,81 +754,152 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         }
       })
 
-      // Drag + ghost
+      // ── Drag + ghost ─────────────────────────────────────────────────
       app.stage.on('pointermove', (e) => {
         const s = useCanvasStore.getState()
         const p = e.global
 
-        // Fixture drag: follow cursor along walls (Sims-style)
-        const fDrag = fixtureDragRef.current
-        if (fDrag?.active && floorVertsRef.current) {
-          const fv = floorVertsRef.current
-          const wH = wallHRef.current
-          const leftQuad = [
-            fv.back, fv.left,
-            { x: fv.left.x, y: fv.left.y - wH },
-            { x: fv.back.x, y: fv.back.y - wH },
-          ]
-          const rightQuad = [
-            fv.back, fv.right,
-            { x: fv.right.x, y: fv.right.y - wH },
-            { x: fv.back.x, y: fv.back.y - wH },
-          ]
-          let screenWall: 'left' | 'right' | null = null
-          if (pointInConvexQuad(p.x, p.y, leftQuad)) screenWall = 'left'
-          else if (pointInConvexQuad(p.x, p.y, rightQuad)) screenWall = 'right'
+        // Vertex drag (shape edit mode)
+        if (vertexDragRef.current?.active && s.shapeEditMode) {
+          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
+          // Snap to 10cm grid
+          const snappedU = Math.round(orig.u * 10) / 10
+          const snappedV = Math.round(orig.v * 10) / 10
+          const verts = getVertices(roomRef.current)
+          const newVerts = [...verts]
+          newVerts[vertexDragRef.current.vertexIndex] = { u: snappedU, v: snappedV }
+          const bbox = computeBoundingBox(newVerts)
+          const newGeo = { ...(roomRef.current.geometry as RoomGeometry), vertices: newVerts }
+          roomRef.current = { ...roomRef.current, geometry: newGeo, width_cm: bbox.width_cm, height_cm: bbox.height_cm }
+          redraw()
+          return
+        }
 
-          if (screenWall) {
-            const wallEnd = screenWall === 'left' ? fv.left : fv.right
-            const screenPos = projectOnSegment(p.x, p.y, fv.back.x, fv.back.y, wallEnd.x, wallEnd.y)
-            const inverse = SCREEN_TO_PHYSICAL[s.roomRotation][screenWall]
-            const physPos = inverse.toPhysical(screenPos)
-            const geo = roomRef.current.geometry as RoomGeometry
-            const fixture = fDrag.type === 'door'
-              ? (geo.doors ?? []).find(d => d.id === fDrag.fixtureId)
-              : (geo.windows ?? []).find(w => w.id === fDrag.fixtureId)
-            if (fixture) {
-              const wLen = physicalWallLength(inverse.wall, dimsRef.current.W, dimsRef.current.D)
-              const halfT = (fixture.width_m / 2) / wLen
-              const clamped = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, physPos))
-              const updated = { ...fixture, wall: inverse.wall, position: clamped }
-              const newGeo = { ...geo }
-              if (fDrag.type === 'door') {
-                newGeo.doors = (geo.doors ?? []).map(d => d.id === fDrag.fixtureId ? updated : d)
-              } else {
-                newGeo.windows = (geo.windows ?? []).map(w => w.id === fDrag.fixtureId ? updated : w)
+        // Wall drag (shape edit mode — push/pull rectangular extrusion)
+        if (wallDragRef.current?.active && s.shapeEditMode) {
+          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
+          const wd = wallDragRef.current
+          const deltaU = orig.u - wd.startMouseU
+          const deltaV = orig.v - wd.startMouseV
+          // Project displacement onto wall normal
+          const projDist = deltaU * wd.normalU + deltaV * wd.normalV
+          const snapped = Math.round(projDist * 10) / 10
+          // Move the 2 inserted vertices perpendicular (original corners stay fixed)
+          const newA = {
+            u: Math.round((wd.startA.u + snapped * wd.normalU) * 10) / 10,
+            v: Math.round((wd.startA.v + snapped * wd.normalV) * 10) / 10,
+          }
+          const newB = {
+            u: Math.round((wd.startB.u + snapped * wd.normalU) * 10) / 10,
+            v: Math.round((wd.startB.v + snapped * wd.normalV) * 10) / 10,
+          }
+          const verts = getVertices(roomRef.current)
+          const newVerts = [...verts]
+          newVerts[wd.insertedIdx1] = newA
+          newVerts[wd.insertedIdx2] = newB
+          const bbox = computeBoundingBox(newVerts)
+          const newGeo = { ...(roomRef.current.geometry as RoomGeometry), vertices: newVerts }
+          roomRef.current = { ...roomRef.current, geometry: newGeo, width_cm: bbox.width_cm, height_cm: bbox.height_cm }
+          redraw()
+          return
+        }
+
+        // Fixture drag: follow cursor along visible walls
+        const fDrag = fixtureDragRef.current
+        if (fDrag?.active && visibleWallsRef.current.length > 0) {
+          for (const vw of visibleWallsRef.current) {
+            if (pointInConvexQuad(p.x, p.y, vw.quad)) {
+              const screenPos = projectOnSegment(p.x, p.y, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
+              const geo = roomRef.current.geometry as RoomGeometry
+              const fixture = fDrag.type === 'door'
+                ? (geo.doors ?? []).find(d => d.id === fDrag.fixtureId)
+                : (geo.windows ?? []).find(w => w.id === fDrag.fixtureId)
+              if (fixture) {
+                const halfT = (fixture.width_m / 2) / vw.lengthM
+                const clamped = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, screenPos))
+                const updated = { ...fixture, wall_index: vw.wallIndex, position: clamped }
+                // Remove deprecated wall field from updated fixture
+                delete (updated as Record<string, unknown>).wall
+                const newGeo = { ...geo }
+                if (fDrag.type === 'door') {
+                  newGeo.doors = (geo.doors ?? []).map(d => d.id === fDrag.fixtureId ? updated : d)
+                } else {
+                  newGeo.windows = (geo.windows ?? []).map(w => w.id === fDrag.fixtureId ? updated : w)
+                }
+                roomRef.current = { ...roomRef.current, geometry: newGeo }
+                redraw()
               }
-              roomRef.current = { ...roomRef.current, geometry: newGeo }
-              redraw()
+              break
             }
           }
         }
 
+        // Furniture drag: point-in-polygon clamping
         if (dragRef.current.active && dragRef.current.itemId) {
-          const { u, v } = screenToRoomRotated(
-            p.x, p.y, frontRef.current, dimsRef.current.W, dimsRef.current.D, s.roomRotation,
-          )
-          s.moveItem(dragRef.current.itemId,
-            Math.max(0.1, Math.min(dimsRef.current.W - 0.1, u)),
-            Math.max(0.1, Math.min(dimsRef.current.D - 0.1, v)),
-          )
+          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
+          const verts = getVertices(roomRef.current)
+          let u = orig.u, v = orig.v
+          if (!pointInPolygon(u, v, verts)) {
+            const nearest = nearestPointOnPolygon(u, v, verts)
+            u = nearest.u; v = nearest.v
+          }
+          s.moveItem(dragRef.current.itemId, u, v)
         }
 
+        // Ghost sprite follows cursor
         if (s.placementMode && ghostRef.current) {
-          const { u, v } = screenToRoomRotated(
-            p.x, p.y, frontRef.current, dimsRef.current.W, dimsRef.current.D, s.roomRotation,
-          )
-          const t = transformForRotation(
-            Math.max(0, Math.min(dimsRef.current.W, u)),
-            Math.max(0, Math.min(dimsRef.current.D, v)),
-            dimsRef.current.W, dimsRef.current.D, s.roomRotation,
-          )
-          const pos = roomToScreen(t.u, t.v, frontRef.current)
+          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const pos = roomToScreen(rotated.u, rotated.v, frontRef.current)
           ghostRef.current.position.set(pos.sx, pos.sy)
         }
       })
 
       app.stage.on('pointerup', () => {
+        if (vertexDragRef.current?.active) {
+          // Commit vertex position to DB
+          const geo = roomRef.current.geometry as RoomGeometry
+          const bbox = computeBoundingBox(geo.vertices ?? [])
+          useProjectStore.getState().updateRoom(roomRef.current.id, {
+            geometry: geo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
+          })
+          vertexDragRef.current = null
+          return
+        }
+        if (wallDragRef.current?.active) {
+          const wd = wallDragRef.current
+          const geo = roomRef.current.geometry as RoomGeometry
+          const verts = geo.vertices ?? []
+
+          // Check if the inserted vertices actually moved from their start positions
+          const v1 = verts[wd.insertedIdx1]
+          const v2 = verts[wd.insertedIdx2]
+          const moved = v1 && v2 && (
+            Math.abs(v1.u - wd.startA.u) > 0.01 || Math.abs(v1.v - wd.startA.v) > 0.01 ||
+            Math.abs(v2.u - wd.startB.u) > 0.01 || Math.abs(v2.v - wd.startB.v) > 0.01
+          )
+
+          if (moved) {
+            // Commit the extrusion
+            const bbox = computeBoundingBox(verts)
+            useProjectStore.getState().updateRoom(roomRef.current.id, {
+              geometry: geo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
+            })
+          } else {
+            // No movement — revert to original geometry (remove inserted vertices)
+            roomRef.current = {
+              ...roomRef.current,
+              geometry: wd.originalGeo,
+              width_cm: wd.originalWidthCm,
+              height_cm: wd.originalHeightCm,
+            }
+            redraw()
+          }
+          wallDragRef.current = null
+          return
+        }
         if (dragRef.current.active) {
           dragRef.current = { active: false, itemId: null }
           useCanvasStore.getState().setDragging(false)
@@ -670,7 +909,6 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       const onKey = (e: KeyboardEvent) => {
         if (e.key === 'Escape') {
           if (fixtureDragRef.current?.active) {
-            // Revert fixture to original position
             roomRef.current = { ...roomRef.current, geometry: fixtureDragRef.current.originalGeo }
             fixtureDragRef.current = null
             useCanvasStore.getState().setSelectedFixture(null)
@@ -681,7 +919,22 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         }
         if ((e.key === 'Delete' || e.key === 'Backspace') && !(e.target instanceof HTMLInputElement)) {
           const s = useCanvasStore.getState()
-          if (s.selectedItemId) s.removeItem(s.selectedItemId)
+          if (s.shapeEditMode && s.selectedVertexIndex != null) {
+            const verts = getVertices(roomRef.current)
+            if (verts.length > 4) {
+              const newVerts = verts.filter((_, i) => i !== s.selectedVertexIndex)
+              const bbox = computeBoundingBox(newVerts)
+              const geo = roomRef.current.geometry as RoomGeometry
+              useProjectStore.getState().updateRoom(roomRef.current.id, {
+                geometry: { ...geo, vertices: newVerts },
+                width_cm: bbox.width_cm,
+                height_cm: bbox.height_cm,
+              })
+              s.setSelectedVertex(null)
+            }
+          } else if (s.selectedItemId) {
+            s.removeItem(s.selectedItemId)
+          }
         }
       }
       window.addEventListener('keydown', onKey)

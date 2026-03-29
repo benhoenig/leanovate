@@ -37,8 +37,8 @@ All Phase 2 verification steps pass. Key implementation details for future refer
 - Always mounted by parent (EditorPage) only when selectedRoom is non-null — never mounts with null room
 - 2:1 isometric projection: Width axis (+T, -T/2) per metre, Depth axis (-T, -T/2) per metre, T=64px/m
 - Wall height: `Math.round((ceiling_height_cm / 100) * T * 0.6)` — fully dynamic from room data
-- Renders: left wall (darker), right wall (lighter), floor, doors/windows from geometry, lighting fixture (glow + dot at ceiling center)
-- Door/window placement: click-to-place on walls. Stored in `room.geometry.doors[]` / `room.geometry.windows[]` with `PhysicalWall` ('north'|'east'|'south'|'west') and position (0-1). `WALL_SCREEN_MAP` handles rotation mapping between 4 physical walls and 2 visible screen walls.
+- Renders: N visible walls (back-to-front sorted), N-vertex floor polygon, doors/windows from geometry, lighting fixture (glow + dot at centroid)
+- Door/window placement: click-to-place on visible walls. Stored in `room.geometry.doors[]` / `room.geometry.windows[]` with `wall_index` (segment index into vertices) and position (0-1). Legacy `PhysicalWall` field migrated via `migrateFixtureWallIndex()` in roomGeometry.ts.
 
 ### finish_materials table
 - All 32 preset materials have hex colors in thumbnail_path (wall: already hex; floor/door/window/lighting: updated from preset:xxx keys)
@@ -86,24 +86,32 @@ Full isometric canvas with furniture placement, drag, rotation, and variant swit
 - `savePlacedFurniture()` batch-updates all positions/directions sequentially (avoids concurrency)
 
 ### IsometricCanvas (`src/components/editor/IsometricCanvas.tsx`)
-- Two PixiJS Container layers: `roomLayer` (walls/floor/fixtures) + `furnitureLayer` (sprites)
+- Three PixiJS Container layers: `roomLayer` (walls/floor/fixtures) + `furnitureLayer` (sprites) + `shapeLayer` (edit handles)
 - Furniture sprites loaded via `Assets.load()` with texture caching (`textureCache` Map)
 - Sprite sizing: `scale = (maxDimCm / 100) * T / 512` where 512 is sprite render size
 - Sprite anchor: `(0.5, 0.85)` — bottom-center so furniture sits on floor
 - Depth sorting: items sorted by `(u + v)` in rotated space (back-to-front)
 - Selection: teal ellipse drawn under selected item, pointerdown on sprite selects + starts drag
-- Drag: pointermove updates room coords via `screenToRoomRotated`, clamped to room bounds
+- Drag: pointermove updates room coords via `screenToRoom` + `unrotatePoint`, clamped to polygon bounds via `nearestPointOnPolygon`
 - Placement mode: ghost sprite at 50% alpha follows cursor, click places item
 - Keyboard: Escape cancels placement, Delete/Backspace removes selected item
 - ResizeObserver for canvas resize
 - Store subscription triggers full redraw on any canvas state change
 
 ### Room Rotation
-- `transformForRotation(u, v, W, D, rotation)` maps room coords to default projection space
-- `screenToRoomRotated()` inverts screen coords back to room coords accounting for rotation
+- `rotateVertices()` / `rotatePoint()` / `unrotatePoint()` in `src/lib/roomGeometry.ts` handle all rotation transforms
 - `apparentDirection()` combines item direction + room rotation for correct sprite selection
-- Room shell redraws with swapped W/D for 90°/270° rotations
 - `RotationControls.tsx` — floating frosted-glass bar with NW/NE/SE/SW buttons
+
+### Polygon Room Shapes
+- Rooms support arbitrary polygon shapes (N vertices, CCW winding) stored in `room.geometry.vertices`
+- `src/lib/roomGeometry.ts` — centralized polygon math (getVertices, pointInPolygon, nearestPointOnPolygon, rotateVertices, isWallVisible, etc.)
+- Wall visibility: outward normal dot camera direction > 0. Visible walls sorted by midpoint depth (back-to-front)
+- Furniture placement: `pointInPolygon` test rejects outside polygon, `nearestPointOnPolygon` clamps drag
+- Fixtures use `wall_index` (segment index) instead of `PhysicalWall` enum. Legacy data migrated via `migrateFixtureWallIndex()`
+- Shape edit mode: vertex handles (drag, 10cm snap), midpoint handles (click to add vertex), Delete to remove (min 4)
+- RightPanel: "Edit Shape" toggle, vertex count, "Reset to Rectangle", read-only dims when custom vertices exist
+- Canvas store: `shapeEditMode`, `selectedVertexIndex` state + actions
 
 ### RightPanel (`src/components/editor/RightPanel.tsx`)
 - Context switching: selected furniture → `FurnitureProperties` | selected room → `RoomProperties` | nothing → empty state

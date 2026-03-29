@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus } from 'lucide-react'
+import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus, Pencil, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import type { RoomGeometry, RoomDoor, RoomWindow } from '@/types'
+import { migrateFixtureWallIndex } from '@/lib/roomGeometry'
 
 export default function RightPanel() {
   const { rooms, selectedRoomId, updateRoom } = useProjectStore()
@@ -150,13 +151,15 @@ function RoomProperties({ room, updateRoom }: {
   room: { id: string; name: string; width_cm: number; height_cm: number; ceiling_height_cm: number; geometry: RoomGeometry }
   updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
 }) {
-  const { setFixturePlacementMode, fixturePlacementType, selectedFixtureId, setSelectedFixture } = useCanvasStore()
+  const { setFixturePlacementMode, fixturePlacementType, selectedFixtureId, setSelectedFixture, shapeEditMode, setShapeEditMode } = useCanvasStore()
   const [name, setName] = useState('')
   const [widthCm, setWidthCm] = useState('')
   const [heightCm, setHeightCm] = useState('')
   const [ceilingCm, setCeilingCm] = useState('')
 
   const geo = room.geometry as RoomGeometry
+  const hasCustomVertices = !!(geo.vertices && geo.vertices.length >= 3)
+  const vertexCount = hasCustomVertices ? geo.vertices!.length : 4
 
   const handleDeleteFixture = (fixtureId: string) => {
     const doors = (geo.doors ?? []).filter(d => d.id !== fixtureId)
@@ -204,18 +207,47 @@ function RoomProperties({ room, updateRoom }: {
         <span className="section-title">DIMENSIONS</span>
         <div className="dims-grid">
           <div className="dim-field">
-            <label className="dim-label">Width (cm)</label>
-            <input className="panel-input" type="number" min="50" max="2000" value={widthCm} onChange={(e) => setWidthCm(e.target.value)} onBlur={commitWidth} onKeyDown={blurOnEnter} />
+            <label className="dim-label">Width (cm){hasCustomVertices ? ' (auto)' : ''}</label>
+            <input className="panel-input" type="number" min="50" max="2000" value={widthCm}
+              onChange={(e) => setWidthCm(e.target.value)} onBlur={commitWidth} onKeyDown={blurOnEnter}
+              readOnly={hasCustomVertices} style={hasCustomVertices ? { opacity: 0.6 } : undefined}
+            />
           </div>
           <div className="dim-field">
-            <label className="dim-label">Depth (cm)</label>
-            <input className="panel-input" type="number" min="50" max="2000" value={heightCm} onChange={(e) => setHeightCm(e.target.value)} onBlur={commitHeight} onKeyDown={blurOnEnter} />
+            <label className="dim-label">Depth (cm){hasCustomVertices ? ' (auto)' : ''}</label>
+            <input className="panel-input" type="number" min="50" max="2000" value={heightCm}
+              onChange={(e) => setHeightCm(e.target.value)} onBlur={commitHeight} onKeyDown={blurOnEnter}
+              readOnly={hasCustomVertices} style={hasCustomVertices ? { opacity: 0.6 } : undefined}
+            />
           </div>
         </div>
         <div className="dim-field">
           <label className="dim-label">Ceiling Height (cm)</label>
           <input className="panel-input" type="number" min="220" max="400" value={ceilingCm} onChange={(e) => setCeilingCm(e.target.value)} onBlur={commitCeiling} onKeyDown={blurOnEnter} />
         </div>
+
+        <button
+          className={`shape-edit-btn ${shapeEditMode ? 'active' : ''}`}
+          onClick={() => setShapeEditMode(!shapeEditMode)}
+        >
+          <Pencil size={12} />
+          {shapeEditMode ? 'Done Editing' : 'Edit Shape'}
+          {shapeEditMode && <span className="vertex-count">{vertexCount} vertices</span>}
+        </button>
+
+        {shapeEditMode && hasCustomVertices && (
+          <button
+            className="shape-reset-btn"
+            onClick={() => {
+              const newGeo = { ...geo }
+              delete newGeo.vertices
+              updateRoom(room.id, { geometry: newGeo })
+              setShapeEditMode(false)
+            }}
+          >
+            <RotateCcw size={12} /> Reset to Rectangle
+          </button>
+        )}
       </div>
 
       <div className="panel-divider" />
@@ -228,7 +260,7 @@ function RoomProperties({ room, updateRoom }: {
           <div key={door.id} className={`fixture-row ${selectedFixtureId === door.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(door.id)}>
             <DoorOpen size={13} />
             <span className="fixture-label">Door {i + 1}</span>
-            <span className="fixture-meta">{door.wall} wall</span>
+            <span className="fixture-meta">Wall {migrateFixtureWallIndex(door) + 1}</span>
             <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(door.id) }} title="Remove door">
               <Trash2 size={11} />
             </button>
@@ -239,7 +271,7 @@ function RoomProperties({ room, updateRoom }: {
           <div key={win.id} className={`fixture-row ${selectedFixtureId === win.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(win.id)}>
             <PanelTop size={13} />
             <span className="fixture-label">Window {i + 1}</span>
-            <span className="fixture-meta">{win.wall} wall</span>
+            <span className="fixture-meta">Wall {migrateFixtureWallIndex(win) + 1}</span>
             <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(win.id) }} title="Remove window">
               <Trash2 size={11} />
             </button>
@@ -636,5 +668,57 @@ const panelStyle = `
     border-style: solid;
     color: white;
     background: var(--color-primary-brand);
+  }
+
+  /* Shape edit */
+  .shape-edit-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--color-border-custom);
+    background: var(--color-card-bg);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .shape-edit-btn:hover {
+    border-color: var(--color-primary-brand);
+    color: var(--color-primary-brand);
+  }
+  .shape-edit-btn.active {
+    border-color: var(--color-primary-brand);
+    background: var(--color-primary-brand);
+    color: white;
+  }
+  .vertex-count {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 500;
+    opacity: 0.8;
+  }
+  .shape-reset-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: 1px solid rgba(229, 77, 66, 0.3);
+    background: transparent;
+    color: var(--color-error);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .shape-reset-btn:hover {
+    background: rgba(229, 77, 66, 0.08);
   }
 `
