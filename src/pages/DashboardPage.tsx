@@ -1,18 +1,70 @@
-import { useAuthStore } from '@/stores/useAuthStore'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Boxes, Plus, LogOut, FolderOpen } from 'lucide-react'
+import { Boxes, Plus, LogOut, FolderOpen, ExternalLink } from 'lucide-react'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { useUIStore } from '@/stores/useUIStore'
+import NewProjectModal from '@/components/NewProjectModal'
+import type { Project } from '@/types'
+
+function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+  const statusColors: Record<string, string> = {
+    draft: 'var(--color-text-secondary)',
+    completed: 'var(--color-success)',
+  }
+
+  const formattedDate = new Date(project.created_at).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+
+  return (
+    <div className="project-card">
+      <div className="project-card-body">
+        <div className="project-card-top">
+          <span
+            className="project-status-dot"
+            style={{ background: statusColors[project.status] ?? 'var(--color-text-secondary)' }}
+          />
+          <span className="project-status-label">{project.status}</span>
+        </div>
+        <h3 className="project-name">{project.name}</h3>
+        {project.description && <p className="project-description">{project.description}</p>}
+        <p className="project-date">{formattedDate}</p>
+      </div>
+      <div className="project-card-footer">
+        <button className="project-open-btn" onClick={onOpen}>
+          <ExternalLink size={13} />
+          Open
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { profile, signOut } = useAuthStore()
+  const { projects, isLoading, loadProjects } = useProjectStore()
+  const { activeModal, openModal } = useUIStore()
+
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
 
   const handleSignOut = async () => {
     await signOut()
     navigate('/login')
   }
 
+  const handleNewProject = () => openModal('new-project')
+
   return (
     <div className="dashboard-page">
+      {/* Modal */}
+      {activeModal === 'new-project' && <NewProjectModal />}
+
       {/* Top Bar */}
       <header className="dashboard-header">
         <div className="header-left">
@@ -34,26 +86,41 @@ export default function DashboardPage() {
       <main className="dashboard-content">
         <div className="dashboard-title-row">
           <h1 className="dashboard-title">My Projects</h1>
-          <button className="new-project-btn">
+          <button className="new-project-btn" onClick={handleNewProject}>
             <Plus size={16} />
             New Project
           </button>
         </div>
 
-        {/* Empty State */}
-        <div className="dashboard-empty">
-          <div className="empty-icon">
-            <FolderOpen size={48} strokeWidth={1.2} />
+        {isLoading ? (
+          <div className="dashboard-loading">
+            <p className="loading-hint">Loading projects…</p>
           </div>
-          <h2 className="empty-title">No projects yet</h2>
-          <p className="empty-description">
-            Create your first project to start designing a condo unit.
-          </p>
-          <button className="empty-cta">
-            <Plus size={16} />
-            Create First Project
-          </button>
-        </div>
+        ) : projects.length === 0 ? (
+          <div className="dashboard-empty">
+            <div className="empty-icon">
+              <FolderOpen size={48} strokeWidth={1.2} />
+            </div>
+            <h2 className="empty-title">No projects yet</h2>
+            <p className="empty-description">
+              Create your first project to start designing a condo unit.
+            </p>
+            <button className="empty-cta" onClick={handleNewProject}>
+              <Plus size={16} />
+              Create First Project
+            </button>
+          </div>
+        ) : (
+          <div className="projects-grid">
+            {projects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onOpen={() => navigate(`/editor/${project.id}`)}
+              />
+            ))}
+          </div>
+        )}
       </main>
 
       <style>{`
@@ -139,7 +206,7 @@ export default function DashboardPage() {
 
         .dashboard-content {
           flex: 1;
-          max-width: 900px;
+          max-width: 960px;
           width: 100%;
           margin: 0 auto;
           padding: 32px 24px;
@@ -176,6 +243,18 @@ export default function DashboardPage() {
         .new-project-btn:hover {
           filter: brightness(1.05);
           box-shadow: 0 2px 8px rgba(43, 168, 160, 0.3);
+        }
+
+        .dashboard-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 300px;
+        }
+
+        .loading-hint {
+          font-size: 13px;
+          color: var(--color-text-secondary);
         }
 
         .dashboard-empty {
@@ -230,6 +309,106 @@ export default function DashboardPage() {
 
         .empty-cta:hover {
           background: rgba(43, 168, 160, 0.12);
+        }
+
+        .projects-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+          gap: 16px;
+        }
+
+        .project-card {
+          background: var(--color-panel-bg);
+          border: 1px solid var(--color-border-custom);
+          border-radius: 10px;
+          display: flex;
+          flex-direction: column;
+          transition: box-shadow 0.15s, border-color 0.15s;
+        }
+
+        .project-card:hover {
+          box-shadow: var(--shadow-md);
+          border-color: var(--color-primary-brand);
+        }
+
+        .project-card-body {
+          padding: 14px;
+          flex: 1;
+        }
+
+        .project-card-top {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 8px;
+        }
+
+        .project-status-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+
+        .project-status-label {
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--color-text-secondary);
+        }
+
+        .project-name {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--color-text-primary);
+          margin-bottom: 4px;
+          line-height: 1.3;
+        }
+
+        .project-description {
+          font-size: 11px;
+          color: var(--color-text-secondary);
+          margin-bottom: 6px;
+          line-height: 1.4;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .project-date {
+          font-size: 10px;
+          color: var(--color-text-secondary);
+          opacity: 0.7;
+        }
+
+        .project-card-footer {
+          padding: 10px 14px;
+          border-top: 1px solid var(--color-border-custom);
+          display: flex;
+          justify-content: flex-end;
+        }
+
+        .project-open-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 5px 12px;
+          border-radius: 6px;
+          background: none;
+          border: 1.5px solid var(--color-primary-brand);
+          color: var(--color-primary-brand);
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+
+        .project-open-btn:hover {
+          background: var(--color-primary-brand);
+          color: white;
         }
       `}</style>
     </div>

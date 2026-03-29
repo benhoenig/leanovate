@@ -24,7 +24,7 @@
 | 3 | Product Link Scraping | Supabase Edge Function | Designer submits a product link |
 | 4 | rembg (Background Removal) | Supabase Edge Function | After scrape succeeds, for each uploaded variant image |
 | 5 | Replicate API — TRELLIS | Supabase Edge Function | After designer approves a clean image |
-| 6 | Three.js Sprite Rendering | Supabase Edge Function or batch script | After TRELLIS returns a .glb file |
+| 6 | Three.js Sprite Rendering | Client (browser) | After TRELLIS returns a .glb file |
 | 7 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
 | 8 | Room Perspective Preview | Supabase Edge Function or render service | Designer clicks "Preview Room" |
 
@@ -156,34 +156,47 @@
 
 ---
 
-## 6. Three.js Sprite Rendering
+## 6. Three.js Sprite Rendering (Client-Side)
 
 **Purpose:** Render 4 isometric sprite images from a .glb 3D model file.
 
-**Triggered by:** TRELLIS successfully returns a .glb file.
+**Runs on:** Client-side (browser) — implemented in `src/lib/renderSprites.ts`
 
-**Send:** .glb file path from Supabase Storage
-**Render 4 views:**
+**Triggered by:** `generate-3d-model` Edge Function returns successfully. The client's `approveImage` flow calls `renderSprites()` after confirming `glb_path` is set.
 
-| Direction | Camera Angle |
-|---|---|
-| `front_left` | Isometric view from front-left corner |
-| `front_right` | Isometric view from front-right corner |
-| `back_left` | Isometric view from back-left corner |
-| `back_right` | Isometric view from back-right corner |
+**Send:** variant ID + .glb file path from Supabase Storage
+**Process:**
+1. Download .glb from `glb-models` bucket
+2. Create offscreen 512×512 canvas (not attached to DOM)
+3. Set up Three.js: WebGLRenderer, Scene, OrthographicCamera (size 1.8), lighting
+4. Load .glb with GLTFLoader, center + normalize to 2-unit cube
+5. Render 4 views:
 
-**Get back:** 4 PNG images (transparent background, consistent size)
+| Direction | Azimuth | Elevation |
+|---|---|---|
+| `front_left` | 225° | 35.264° |
+| `front_right` | 315° | 35.264° |
+| `back_left` | 135° | 35.264° |
+| `back_right` | 45° | 35.264° |
+
+6. Export each as PNG blob via `canvas.toBlob()`
+7. Upload 4 PNGs to `sprites` bucket
+8. Upsert 4 `furniture_sprites` rows
+
+**Get back:** 4 PNG images (transparent background, 512×512px)
 
 **Where it goes:**
 - 4 images saved to `sprites` bucket in Supabase Storage
-- 4 rows created in `furniture_sprites` table (one per direction)
+- 4 rows upserted in `furniture_sprites` table (one per direction)
 - `furniture_variants.render_status` updated: `processing` → `completed`
 
 **Rendering specs:**
-- Isometric camera angle (standard isometric projection)
-- Transparent background
-- Consistent output size across all products (so sprites align on the canvas grid)
-- Lighting: soft ambient + directional light for natural shadows
+- OrthographicCamera with true isometric projection (35.264° elevation)
+- Transparent background (alpha: true, clearColor 0x000000 at opacity 0)
+- 512×512px output size
+- Lighting: ambient 0.6 white + directional 1.2 warm (5,10,7) + fill 0.4 cool (-5,3,-5)
+
+**Why client-side:** Server-side rendering via Supabase Edge Functions (Deno) failed because headless canvas libraries (`npm:canvas`) require native binaries unavailable in Edge Functions. Browser WebGL rendering works reliably.
 
 **Error handling:** On render failure, set `render_status` to `failed`. Designer can retry (which re-runs from TRELLIS or just re-renders from existing .glb if it exists).
 

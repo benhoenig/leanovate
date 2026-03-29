@@ -39,6 +39,14 @@ export interface Project {
   updated_at: string
 }
 
+export interface RoomFinishes {
+  wall?: { material_id: string | null; custom_url: string | null }
+  floor?: { material_id: string | null; custom_url: string | null }
+  door?: { material_id: string | null; custom_url: string | null }
+  window?: { material_id: string | null; custom_url: string | null }
+  lighting?: { material_id: string | null; custom_url: string | null }
+}
+
 export interface Room {
   id: string
   project_id: string
@@ -47,8 +55,9 @@ export interface Room {
   y: number
   width_cm: number
   height_cm: number
+  ceiling_height_cm: number
   geometry: Record<string, unknown>
-  finishes: Record<string, unknown>
+  finishes: RoomFinishes
   sort_order: number
   preview_image_url: string | null
   created_at: string

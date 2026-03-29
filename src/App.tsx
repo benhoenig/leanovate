@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useUIStore } from '@/stores/useUIStore'
 import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
 import EditorPage from '@/pages/EditorPage'
-import { Boxes } from 'lucide-react'
+import { Boxes, X } from 'lucide-react'
 
 // Auth-protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -71,6 +72,48 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function Toast() {
+  const { toast, clearToast } = useUIStore()
+  if (!toast) return null
+
+  const bgColor =
+    toast.type === 'error' ? '#E54D42' :
+    toast.type === 'warning' ? '#F5A623' :
+    '#4CAF82'
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 16,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 9999,
+      background: bgColor,
+      color: 'white',
+      padding: '10px 16px 10px 14px',
+      borderRadius: 10,
+      boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      fontSize: 13,
+      fontWeight: 600,
+      maxWidth: 400,
+    }}>
+      <span style={{ flex: 1 }}>{toast.message}</span>
+      <button
+        onClick={clearToast}
+        style={{
+          background: 'none', border: 'none', color: 'white',
+          cursor: 'pointer', padding: 2, display: 'flex', opacity: 0.8,
+        }}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  )
+}
+
 export default function App() {
   const initialize = useAuthStore((s) => s.initialize)
 
@@ -80,6 +123,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <Toast />
       <Routes>
         <Route
           path="/login"

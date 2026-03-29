@@ -1,27 +1,74 @@
+import { useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Boxes, ArrowLeft, Save } from 'lucide-react'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { useUIStore } from '@/stores/useUIStore'
+import LeftSidebar from '@/components/editor/LeftSidebar'
+import RightPanel from '@/components/editor/RightPanel'
+import IsometricCanvas from '@/components/editor/IsometricCanvas'
 
 export default function EditorPage() {
-  const { projectId } = useParams()
+  const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+
+  const { currentProject, rooms, selectedRoomId, finishMaterials, isDirty, isLoading, loadProject, loadFinishMaterials, saveProject } = useProjectStore()
+  const { showToast } = useUIStore()
+
+  const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
+
+  useEffect(() => {
+    if (!projectId) return
+    loadProject(projectId)
+    loadFinishMaterials()
+  }, [projectId, loadProject, loadFinishMaterials])
+
+  // Warn on browser tab close
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
+  const handleSave = async () => {
+    await saveProject()
+    showToast('Project saved', 'success')
+  }
+
+  const handleBack = () => {
+    if (isDirty) {
+      if (!window.confirm('You have unsaved changes. Leave without saving?')) return
+    }
+    navigate('/')
+  }
 
   return (
     <div className="editor-page">
       {/* Editor Top Bar */}
       <header className="editor-header">
         <div className="editor-header-left">
-          <button className="editor-back-btn" onClick={() => navigate('/')}>
+          <button className="editor-back-btn" onClick={handleBack} title="Back to dashboard">
             <ArrowLeft size={16} />
           </button>
           <div className="header-logo-icon-small">
             <Boxes size={14} strokeWidth={1.8} />
           </div>
-          <span className="editor-project-name">Untitled Project</span>
+          <span className="editor-project-name">
+            {currentProject?.name ?? 'Loading…'}
+          </span>
+          {isDirty && <span className="unsaved-badge">Unsaved</span>}
         </div>
         <div className="editor-header-right">
-          <button className="editor-save-btn">
+          <button
+            className="editor-save-btn"
+            onClick={handleSave}
+            disabled={isLoading || !isDirty}
+          >
             <Save size={14} />
-            Save
+            {isLoading ? 'Saving…' : 'Save'}
           </button>
         </div>
       </header>
@@ -30,31 +77,24 @@ export default function EditorPage() {
       <div className="editor-body">
         {/* Left Sidebar */}
         <aside className="editor-sidebar-left">
-          <div className="sidebar-placeholder">
-            <p className="placeholder-text">Left Sidebar</p>
-            <p className="placeholder-hint">Rooms • Catalog • Templates</p>
-          </div>
+          <LeftSidebar />
         </aside>
 
         {/* Canvas Area */}
         <main className="editor-canvas">
-          <div className="canvas-placeholder">
-            <div className="canvas-grid-icon">
-              <Boxes size={36} strokeWidth={1} />
-            </div>
-            <p className="canvas-placeholder-text">Isometric Canvas</p>
-            <p className="canvas-placeholder-hint">
-              Project: {projectId?.slice(0, 8)}...
-            </p>
-          </div>
+          {selectedRoom
+            ? <IsometricCanvas room={selectedRoom} finishMaterials={finishMaterials} />
+            : (
+              <div className="canvas-empty">
+                <p className="canvas-empty-text">Select a room to view the canvas</p>
+              </div>
+            )
+          }
         </main>
 
         {/* Right Panel */}
         <aside className="editor-sidebar-right">
-          <div className="sidebar-placeholder">
-            <p className="placeholder-text">Right Panel</p>
-            <p className="placeholder-hint">Properties • Cost</p>
-          </div>
+          <RightPanel />
         </aside>
       </div>
 
@@ -118,6 +158,17 @@ export default function EditorPage() {
           color: var(--color-text-primary);
         }
 
+        .unsaved-badge {
+          font-size: 9px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+          background: var(--color-warning-bg);
+          color: var(--color-warning-text);
+          padding: 2px 6px;
+          border-radius: 4px;
+        }
+
         .editor-header-right {
           display: flex;
           align-items: center;
@@ -137,10 +188,16 @@ export default function EditorPage() {
           border: none;
           cursor: pointer;
           font-family: inherit;
+          transition: all 0.15s;
         }
 
-        .editor-save-btn:hover {
+        .editor-save-btn:hover:not(:disabled) {
           background: var(--color-primary-brand-hover);
+        }
+
+        .editor-save-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
         }
 
         .editor-body {
@@ -154,75 +211,36 @@ export default function EditorPage() {
           background: var(--color-panel-bg);
           border-right: 1px solid var(--color-border-custom);
           flex-shrink: 0;
-          overflow-y: auto;
+          overflow: hidden;
         }
 
         .editor-sidebar-right {
-          width: 260px;
+          width: 240px;
           background: var(--color-panel-bg);
           border-left: 1px solid var(--color-border-custom);
           flex-shrink: 0;
-          overflow-y: auto;
+          overflow: hidden;
         }
 
         .editor-canvas {
           flex: 1;
-          display: flex;
-          align-items: center;
-          justify-content: center;
           background: var(--color-canvas-bg);
+          overflow: hidden;
+          position: relative;
         }
 
-        .sidebar-placeholder {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
+        .canvas-empty {
+          width: 100%;
           height: 100%;
-          text-align: center;
-          padding: 20px;
-        }
-
-        .placeholder-text {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--color-text-secondary);
-        }
-
-        .placeholder-hint {
-          font-size: 11px;
-          color: var(--color-text-secondary);
-          opacity: 0.6;
-          margin-top: 4px;
-        }
-
-        .canvas-placeholder {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 8px;
-          color: var(--color-text-secondary);
-          opacity: 0.5;
-        }
-
-        .canvas-grid-icon {
-          width: 72px;
-          height: 72px;
-          border-radius: 18px;
-          background: var(--color-hover-bg);
           display: flex;
           align-items: center;
           justify-content: center;
-          margin-bottom: 4px;
         }
 
-        .canvas-placeholder-text {
-          font-size: 15px;
-          font-weight: 600;
-        }
-
-        .canvas-placeholder-hint {
-          font-size: 11px;
+        .canvas-empty-text {
+          font-size: 13px;
+          color: var(--color-text-secondary);
+          opacity: .6;
         }
       `}</style>
     </div>

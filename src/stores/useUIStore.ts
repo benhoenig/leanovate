@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-type SidebarTab = 'rooms' | 'catalog' | 'templates'
+export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'templates'
 type RightPanelTab = 'properties' | 'cost'
 
 interface UIState {
