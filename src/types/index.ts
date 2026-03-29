@@ -56,6 +56,7 @@ export interface RoomDoor {
   wall: PhysicalWall
   position: number  // 0-1 along the wall
   width_m: number   // width in metres (default 0.8)
+  height_m?: number // height from floor in metres (default ~ceiling×0.82)
 }
 
 export interface RoomWindow {
@@ -63,6 +64,8 @@ export interface RoomWindow {
   wall: PhysicalWall
   position: number
   width_m: number   // width in metres (default 1.0)
+  height_m?: number // window opening height in metres (default ~ceiling×0.48)
+  sill_m?: number   // sill height from floor in metres (default ~ceiling×0.30)
 }
 
 export interface RoomGeometry {

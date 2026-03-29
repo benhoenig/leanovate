@@ -242,9 +242,11 @@ function drawRoomShell(
   const windows = geo?.windows ?? []
   const wallMap = WALL_SCREEN_MAP[rot]
 
+  const pxPerM = T * 0.6 // wall pixel-per-metre (matches wallHeightPx formula)
+
   const renderFixture = (
     id: string, wall: PhysicalWall, position: number, widthM: number,
-    type: 'door' | 'window',
+    type: 'door' | 'window', heightM?: number, sillM?: number,
   ) => {
     const mapping = wallMap[wall]
     if (!mapping) return // not visible in this rotation
@@ -261,7 +263,7 @@ function drawRoomShell(
     const isSelected = id === selectedFixtureId
 
     if (type === 'door') {
-      const dH = wallH * 0.82
+      const dH = heightM != null ? heightM * pxPerM : wallH * 0.82
       const g = new Graphics()
       g.poly([bl.x, bl.y, br.x, br.y, br.x, br.y - dH, bl.x, bl.y - dH])
       g.fill({ color: doorColor })
@@ -273,15 +275,16 @@ function drawRoomShell(
       const hd = new Graphics(); hd.circle(hb.x, hb.y - dH * 0.45, 2.5)
       hd.fill({ color: blendColor(doorColor, 0x000000, 0.45) }); container.addChild(hd)
     } else {
-      const wSill = wallH * 0.30, wTop = wallH * 0.78
+      const sillPx = sillM != null ? sillM * pxPerM : wallH * 0.30
+      const topPx = heightM != null ? sillPx + heightM * pxPerM : wallH * 0.78
       const wg = new Graphics()
-      wg.poly([bl.x, bl.y - wSill, br.x, br.y - wSill, br.x, br.y - wTop, bl.x, bl.y - wTop])
+      wg.poly([bl.x, bl.y - sillPx, br.x, br.y - sillPx, br.x, br.y - topPx, bl.x, bl.y - topPx])
       wg.fill({ color: 0xC8E8F4, alpha: 0.65 })
       wg.eventMode = 'static'; wg.cursor = 'pointer'
       wg.on('pointerdown', (e: { stopPropagation: () => void }) => { e.stopPropagation(); onFixtureClick?.(id) })
       container.addChild(wg)
       const wf = new Graphics()
-      wf.poly([bl.x, bl.y - wSill, br.x, br.y - wSill, br.x, br.y - wTop, bl.x, bl.y - wTop])
+      wf.poly([bl.x, bl.y - sillPx, br.x, br.y - sillPx, br.x, br.y - topPx, bl.x, bl.y - topPx])
       wf.fill({ color: 0x000000, alpha: 0 })
       wf.stroke({ color: isSelected ? 0x2BA8A0 : winColor, width: isSelected ? 3 : 2.5 })
       wf.eventMode = 'none'
@@ -289,8 +292,8 @@ function drawRoomShell(
     }
   }
 
-  for (const door of doors) renderFixture(door.id, door.wall, door.position, door.width_m, 'door')
-  for (const win of windows) renderFixture(win.id, win.wall, win.position, win.width_m, 'window')
+  for (const door of doors) renderFixture(door.id, door.wall, door.position, door.width_m, 'door', door.height_m)
+  for (const win of windows) renderFixture(win.id, win.wall, win.position, win.width_m, 'window', win.height_m, win.sill_m)
 
   // Light
   const glow = new Graphics(); glow.circle(cx, cy - wallH, 22); glow.fill({ color: lightColor, alpha: 0.18 })
