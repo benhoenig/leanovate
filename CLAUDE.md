@@ -19,9 +19,10 @@ Internal isometric room planner for an interior design team serving condo invest
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-Phase 4: Isometric Canvas
+Phase 5: Templates + Cost Summary
 <!-- Phase 1: Foundation — COMPLETE (schema + storage buckets in supabase/migrations/20240101000000_full_schema.sql) -->
 <!-- Phase 2: Room Builder — COMPLETE -->
+<!-- Phase 4: Isometric Canvas — COMPLETE (furniture placement, drag, rotate, variant switch, room rotation, right panel properties) -->
 <!-- Phase 3: Furniture Catalog + AI Pipeline — COMPLETE (seed migration, useCatalogStore, CatalogPanel, AddFurnitureModal, ImageApprovalModal, 4 edge functions) -->
 <!-- Update this line as you progress through phases. See docs/implementation-plan.md for phase details. -->
 
@@ -36,8 +37,8 @@ All Phase 2 verification steps pass. Key implementation details for future refer
 - Always mounted by parent (EditorPage) only when selectedRoom is non-null — never mounts with null room
 - 2:1 isometric projection: Width axis (+T, -T/2) per metre, Depth axis (-T, -T/2) per metre, T=64px/m
 - Wall height: `Math.round((ceiling_height_cm / 100) * T * 0.6)` — fully dynamic from room data
-- Renders: left wall (darker), right wall (lighter), floor, door (placeholder centered on left wall), window (placeholder centered on right wall), lighting fixture (glow + dot at ceiling center)
-- Door/window positions are HARDCODED PLACEHOLDERS — Phase 4 will replace with room.geometry data
+- Renders: left wall (darker), right wall (lighter), floor, doors/windows from geometry, lighting fixture (glow + dot at ceiling center)
+- Door/window placement: click-to-place on walls. Stored in `room.geometry.doors[]` / `room.geometry.windows[]` with `PhysicalWall` ('north'|'east'|'south'|'west') and position (0-1). `WALL_SCREEN_MAP` handles rotation mapping between 4 physical walls and 2 visible screen walls.
 
 ### finish_materials table
 - All 32 preset materials have hex colors in thumbnail_path (wall: already hex; floor/door/window/lighting: updated from preset:xxx keys)
@@ -74,6 +75,50 @@ The Supabase JS client hangs when multiple operations run concurrently through t
 
 ### CatalogPanel Polling
 `CatalogPanel.tsx` has a 5-second polling interval that reloads variants for items with `image_status === 'processing'` or `render_status === 'processing'`. This can conflict with concurrent Supabase operations — avoid calling `loadVariantsForItem` from async callbacks that may overlap with polling.
+
+## Phase 4 Completion Notes
+Full isometric canvas with furniture placement, drag, rotation, and variant switching.
+
+### Canvas Store (`src/stores/useCanvasStore.ts`)
+- Full CRUD for `placed_furniture` table: load, place, move, rotate, remove, variant switch
+- Optimistic local updates with background DB writes for move/rotate/switchVariant
+- `placeItem` reads price from Catalog Store for `price_at_placement`
+- `savePlacedFurniture()` batch-updates all positions/directions sequentially (avoids concurrency)
+
+### IsometricCanvas (`src/components/editor/IsometricCanvas.tsx`)
+- Two PixiJS Container layers: `roomLayer` (walls/floor/fixtures) + `furnitureLayer` (sprites)
+- Furniture sprites loaded via `Assets.load()` with texture caching (`textureCache` Map)
+- Sprite sizing: `scale = (maxDimCm / 100) * T / 512` where 512 is sprite render size
+- Sprite anchor: `(0.5, 0.85)` — bottom-center so furniture sits on floor
+- Depth sorting: items sorted by `(u + v)` in rotated space (back-to-front)
+- Selection: teal ellipse drawn under selected item, pointerdown on sprite selects + starts drag
+- Drag: pointermove updates room coords via `screenToRoomRotated`, clamped to room bounds
+- Placement mode: ghost sprite at 50% alpha follows cursor, click places item
+- Keyboard: Escape cancels placement, Delete/Backspace removes selected item
+- ResizeObserver for canvas resize
+- Store subscription triggers full redraw on any canvas state change
+
+### Room Rotation
+- `transformForRotation(u, v, W, D, rotation)` maps room coords to default projection space
+- `screenToRoomRotated()` inverts screen coords back to room coords accounting for rotation
+- `apparentDirection()` combines item direction + room rotation for correct sprite selection
+- Room shell redraws with swapped W/D for 90°/270° rotations
+- `RotationControls.tsx` — floating frosted-glass bar with NW/NE/SE/SW buttons
+
+### RightPanel (`src/components/editor/RightPanel.tsx`)
+- Context switching: selected furniture → `FurnitureProperties` | selected room → `RoomProperties` | nothing → empty state
+- `FurnitureProperties`: item name, category, variant swatches (32px with images), price, dimensions, direction, source link, rotate + remove buttons
+- Variant swatches call `canvasStore.switchVariant()` for instant color switching
+
+### CatalogPanel Changes
+- "Place on Canvas" button in expanded item section (prefers variant with completed sprites)
+- Triggers `canvasStore.setPlacementMode(true, itemId, variantId)`
+
+### EditorPage Wiring
+- Loads placed furniture on `selectedRoomId` change, preloads variants + sprites
+- `handleSave` also calls `canvasStore.savePlacedFurniture()`
+- Placement mode badge in header ("Click on canvas to place — Esc to cancel")
+- Canvas cursor: `crosshair` in placement mode, `grabbing` when dragging
 
 ## Code Style
 - TypeScript strict mode

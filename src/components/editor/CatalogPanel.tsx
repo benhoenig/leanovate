@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Search, Plus, CheckCircle, Clock } from 'lucide-react'
+import { Search, Plus, CheckCircle, Clock, MousePointerClick } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import FurnitureItemCard from './FurnitureItemCard'
 import AddFurnitureModal from './AddFurnitureModal'
@@ -88,6 +89,15 @@ export default function CatalogPanel() {
 
   const handleImageApprovalClick = (item: FurnitureItem, variant: FurnitureVariant) => {
     setApprovalTarget({ item, variant })
+  }
+
+  const handlePlaceOnCanvas = (item: FurnitureItem) => {
+    const variants = getVariantsForItem(item.id)
+    // Pick first variant (prefer one with completed sprites)
+    const withSprites = variants.find((v) => v.render_status === 'completed')
+    const firstVariant = withSprites ?? variants[0]
+    if (!firstVariant) return
+    useCanvasStore.getState().setPlacementMode(true, item.id, firstVariant.id)
   }
 
   return (
@@ -195,6 +205,16 @@ export default function CatalogPanel() {
               {/* Expanded: image approval buttons + admin actions */}
               {selectedItemId === item.id && (
                 <div className="item-expanded">
+                  {/* Place on canvas */}
+                  {variants.length > 0 && (
+                    <button
+                      className="place-canvas-btn"
+                      onClick={() => handlePlaceOnCanvas(item)}
+                    >
+                      <MousePointerClick size={12} />
+                      Place on Canvas
+                    </button>
+                  )}
                   {/* Image approval buttons */}
                   {variants
                     .filter((v) => v.image_status === 'pending_approval')
@@ -423,6 +443,26 @@ export default function CatalogPanel() {
           display: flex;
           flex-direction: column;
           gap: 6px;
+        }
+        .place-canvas-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          width: 100%;
+          padding: 6px 10px;
+          border-radius: 6px;
+          border: 1.5px solid var(--color-primary-brand);
+          background: var(--color-primary-brand);
+          color: white;
+          font-size: 11px;
+          font-weight: 600;
+          font-family: inherit;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .place-canvas-btn:hover {
+          background: var(--color-primary-brand-hover);
         }
         .approval-inline-btn {
           display: flex;

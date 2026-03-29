@@ -47,6 +47,30 @@ export interface RoomFinishes {
   lighting?: { material_id: string | null; custom_url: string | null }
 }
 
+// --- Room Geometry (doors/windows on walls) ---
+
+export type PhysicalWall = 'north' | 'east' | 'south' | 'west'
+
+export interface RoomDoor {
+  id: string
+  wall: PhysicalWall
+  position: number  // 0-1 along the wall
+  width_m: number   // width in metres (default 0.8)
+}
+
+export interface RoomWindow {
+  id: string
+  wall: PhysicalWall
+  position: number
+  width_m: number   // width in metres (default 1.0)
+}
+
+export interface RoomGeometry {
+  walls?: unknown[]
+  doors?: RoomDoor[]
+  windows?: RoomWindow[]
+}
+
 export interface Room {
   id: string
   project_id: string
@@ -56,7 +80,7 @@ export interface Room {
   width_cm: number
   height_cm: number
   ceiling_height_cm: number
-  geometry: Record<string, unknown>
+  geometry: RoomGeometry
   finishes: RoomFinishes
   sort_order: number
   preview_image_url: string | null
