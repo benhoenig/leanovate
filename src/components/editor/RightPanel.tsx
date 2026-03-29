@@ -3,7 +3,7 @@ import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus, Pencil, Rotat
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
-import type { RoomGeometry, RoomDoor, RoomWindow } from '@/types'
+import type { RoomGeometry, RoomDoor, RoomWindow, CurtainStyle } from '@/types'
 import { migrateFixtureWallIndex } from '@/lib/roomGeometry'
 
 export default function RightPanel() {
@@ -402,6 +402,122 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
           </div>
         )}
       </div>
+
+      {!isDoor && (
+        <CurtainControls
+          win={win!}
+          geo={geo}
+          roomId={roomId}
+          updateRoom={updateRoom}
+        />
+      )}
+    </>
+  )
+}
+
+// ── Curtain Controls ──────────────────────────────────────────────────────────
+
+const CURTAIN_PRESETS = [
+  { name: 'Linen', hex: '#F5F0E8' },
+  { name: 'White', hex: '#FFFFFF' },
+  { name: 'Cream', hex: '#F5F0D0' },
+  { name: 'Beige', hex: '#D4C5A9' },
+  { name: 'Soft Blue', hex: '#B8CCD8' },
+  { name: 'Sage', hex: '#B5C4B1' },
+  { name: 'Walnut', hex: '#6B4E3D' },
+  { name: 'Charcoal', hex: '#4A4A4A' },
+]
+
+function CurtainControls({ win, geo, roomId, updateRoom }: {
+  win: RoomWindow
+  geo: RoomGeometry
+  roomId: string
+  updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
+}) {
+  const style = (win.curtain_style ?? 'none') as CurtainStyle
+  const color = win.curtain_color ?? '#F5F0E8'
+  const [hexInput, setHexInput] = useState(color)
+
+  useEffect(() => { setHexInput(color) }, [color])
+
+  const updateWindow = (updates: Partial<RoomWindow>) => {
+    const newGeo = {
+      ...geo,
+      windows: (geo.windows ?? []).map(w => w.id === win.id ? { ...w, ...updates } : w),
+    }
+    updateRoom(roomId, { geometry: newGeo })
+  }
+
+  const commitHex = () => {
+    const val = hexInput.trim()
+    if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+      updateWindow({ curtain_color: val })
+    } else {
+      setHexInput(color)
+    }
+  }
+
+  const blurOnEnter = (e: React.KeyboardEvent) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }
+
+  return (
+    <>
+      <div className="panel-divider" />
+      <div className="panel-section">
+        <span className="section-title">CURTAIN</span>
+        <div className="curtain-style-row">
+          {(['none', 'open', 'closed'] as CurtainStyle[]).map((s) => (
+            <button
+              key={s}
+              className={`curtain-style-btn ${style === s ? 'active' : ''}`}
+              onClick={() => updateWindow({ curtain_style: s })}
+            >
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {style !== 'none' && (
+          <>
+            <div className="curtain-color-row">
+              <label className="dim-label">Color</label>
+              <div className="curtain-color-input">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => {
+                    setHexInput(e.target.value)
+                    updateWindow({ curtain_color: e.target.value })
+                  }}
+                  className="curtain-picker"
+                />
+                <input
+                  className="panel-input curtain-hex"
+                  value={hexInput}
+                  onChange={(e) => setHexInput(e.target.value)}
+                  onBlur={commitHex}
+                  onKeyDown={blurOnEnter}
+                  maxLength={7}
+                />
+              </div>
+            </div>
+
+            <div className="curtain-presets">
+              {CURTAIN_PRESETS.map((p) => (
+                <button
+                  key={p.hex}
+                  className={`curtain-swatch ${color === p.hex ? 'selected' : ''}`}
+                  style={{ background: p.hex }}
+                  onClick={() => {
+                    setHexInput(p.hex)
+                    updateWindow({ curtain_color: p.hex })
+                  }}
+                  title={p.name}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </>
   )
 }
@@ -720,5 +836,80 @@ const panelStyle = `
   }
   .shape-reset-btn:hover {
     background: rgba(229, 77, 66, 0.08);
+  }
+
+  /* Curtain controls */
+  .curtain-style-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+  }
+  .curtain-style-btn {
+    padding: 5px 0;
+    border-radius: 6px;
+    border: 1.5px solid var(--color-border-custom);
+    background: var(--color-card-bg);
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .curtain-style-btn:hover {
+    border-color: var(--color-primary-brand);
+    color: var(--color-primary-brand);
+  }
+  .curtain-style-btn.active {
+    background: var(--color-primary-brand);
+    border-color: var(--color-primary-brand);
+    color: white;
+  }
+  .curtain-color-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .curtain-color-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .curtain-picker {
+    width: 28px;
+    height: 28px;
+    border: 1.5px solid var(--color-border-custom);
+    border-radius: 6px;
+    padding: 1px;
+    cursor: pointer;
+    background: none;
+    flex-shrink: 0;
+  }
+  .curtain-hex {
+    flex: 1;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  .curtain-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .curtain-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 2px solid var(--color-border-custom);
+    cursor: pointer;
+    transition: all 0.15s;
+    padding: 0;
+  }
+  .curtain-swatch:hover {
+    transform: scale(1.12);
+  }
+  .curtain-swatch.selected {
+    border-color: var(--color-primary-brand);
+    box-shadow: 0 0 0 1.5px var(--color-primary-brand);
   }
 `

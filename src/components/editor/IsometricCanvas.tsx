@@ -214,6 +214,7 @@ function drawRoomShell(
   const renderFixture = (
     id: string, wallIndex: number, position: number, widthM: number,
     type: 'door' | 'window', heightM?: number, sillM?: number,
+    curtainStyle?: string, curtainColor?: string,
   ) => {
     // Find this wall in visible walls
     const vw = visibleWalls.find(w => w.wallIndex === wallIndex)
@@ -254,6 +255,105 @@ function drawRoomShell(
       wf.stroke({ color: isSelected ? 0x2BA8A0 : winColor, width: isSelected ? 3 : 2.5 })
       wf.eventMode = 'none'
       container.addChild(wf)
+
+      // ── Curtain rendering ──
+      const cStyle = curtainStyle ?? 'none'
+      if (cStyle !== 'none') {
+        const cHex = curtainColor ?? '#F5F0E8'
+        const cColor = parseInt(cHex.slice(1), 16)
+        const cDark = blendColor(cColor, 0x000000, 0.35)
+        const rodY = Math.min(bl.y, br.y) - topPx - 5
+
+        // Rod
+        const rod = new Graphics()
+        rod.moveTo(bl.x - 4, rodY).lineTo(br.x + 4, rodY)
+        rod.stroke({ color: cDark, width: 2 })
+        rod.circle(bl.x - 4, rodY, 2.5).fill({ color: cDark })
+        rod.circle(br.x + 4, rodY, 2.5).fill({ color: cDark })
+        rod.eventMode = 'none'
+        container.addChild(rod)
+
+        if (cStyle === 'closed') {
+          // Full fabric covering window
+          const curtain = new Graphics()
+          curtain.poly([bl.x, rodY, br.x, rodY, br.x, br.y - sillPx + 6, bl.x, bl.y - sillPx + 6])
+          curtain.fill({ color: cColor, alpha: 0.85 })
+          curtain.eventMode = 'none'
+          container.addChild(curtain)
+
+          // Fold lines
+          const folds = new Graphics()
+          const numFolds = 5
+          for (let i = 1; i < numFolds; i++) {
+            const t = i / numFolds
+            const fx = bl.x + (br.x - bl.x) * t
+            const fy1 = rodY
+            const fy2Base = bl.y + (br.y - bl.y) * t
+            const fy2 = fy2Base - sillPx + 6
+            folds.moveTo(fx, fy1).lineTo(fx, fy2)
+          }
+          folds.stroke({ color: cDark, width: 1, alpha: 0.2 })
+          folds.eventMode = 'none'
+          container.addChild(folds)
+        } else {
+          // Open curtain — two bunched panels at sides
+          const panelFrac = 0.15
+          const bottomL = bl.y - sillPx + 6
+          const bottomR = br.y - sillPx + 6
+          const innerL = bl.x + (br.x - bl.x) * panelFrac
+          const innerR = br.x - (br.x - bl.x) * panelFrac
+          const innerBottomL = bl.y + (br.y - bl.y) * panelFrac - sillPx + 6
+          const innerBottomR = br.y - (br.y - bl.y) * panelFrac - sillPx + 6
+
+          // Left panel
+          const lp = new Graphics()
+          lp.poly([bl.x, rodY, innerL, rodY, innerL, innerBottomL, bl.x, bottomL])
+          lp.fill({ color: cColor, alpha: 0.85 })
+          lp.eventMode = 'none'
+          container.addChild(lp)
+
+          // Left panel fold
+          const lfold = new Graphics()
+          const lmx = (bl.x + innerL) / 2
+          const lmb = (bottomL + innerBottomL) / 2
+          lfold.moveTo(lmx, rodY).lineTo(lmx, lmb)
+          lfold.stroke({ color: cDark, width: 1, alpha: 0.25 })
+          lfold.eventMode = 'none'
+          container.addChild(lfold)
+
+          // Left tieback
+          const tieY = rodY + (bottomL - rodY) * 0.6
+          const ltie = new Graphics()
+          ltie.moveTo(bl.x + 1, tieY).lineTo(innerL - 1, tieY)
+          ltie.stroke({ color: cDark, width: 1.5 })
+          ltie.eventMode = 'none'
+          container.addChild(ltie)
+
+          // Right panel
+          const rp = new Graphics()
+          rp.poly([innerR, rodY, br.x, rodY, br.x, bottomR, innerR, innerBottomR])
+          rp.fill({ color: cColor, alpha: 0.85 })
+          rp.eventMode = 'none'
+          container.addChild(rp)
+
+          // Right panel fold
+          const rfold = new Graphics()
+          const rmx = (innerR + br.x) / 2
+          const rmb = (innerBottomR + bottomR) / 2
+          rfold.moveTo(rmx, rodY).lineTo(rmx, rmb)
+          rfold.stroke({ color: cDark, width: 1, alpha: 0.25 })
+          rfold.eventMode = 'none'
+          container.addChild(rfold)
+
+          // Right tieback
+          const tieYR = rodY + (bottomR - rodY) * 0.6
+          const rtie = new Graphics()
+          rtie.moveTo(innerR + 1, tieYR).lineTo(br.x - 1, tieYR)
+          rtie.stroke({ color: cDark, width: 1.5 })
+          rtie.eventMode = 'none'
+          container.addChild(rtie)
+        }
+      }
     }
   }
 
@@ -263,7 +363,7 @@ function drawRoomShell(
   }
   for (const win of windows) {
     const wi = migrateFixtureWallIndex(win)
-    renderFixture(win.id, wi, win.position, win.width_m, 'window', win.height_m, win.sill_m)
+    renderFixture(win.id, wi, win.position, win.width_m, 'window', win.height_m, win.sill_m, win.curtain_style, win.curtain_color)
   }
 
   // ── Lighting at polygon centroid ──────────────────────────────────────

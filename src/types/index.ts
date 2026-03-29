@@ -13,6 +13,7 @@ export type Direction = 'front_left' | 'front_right' | 'back_left' | 'back_right
 export type LinkStatus = 'active' | 'inactive' | 'unchecked'
 export type ProjectStatus = 'draft' | 'completed'
 export type FinishType = 'wall' | 'floor' | 'door' | 'window' | 'lighting'
+export type CurtainStyle = 'none' | 'open' | 'closed'
 
 // --- Auth & Team ---
 
@@ -73,6 +74,8 @@ export interface RoomWindow {
   width_m: number     // width in metres (default 1.0)
   height_m?: number   // window opening height in metres (default ~ceiling×0.48)
   sill_m?: number     // sill height from floor in metres (default ~ceiling×0.30)
+  curtain_style?: CurtainStyle  // default 'none'
+  curtain_color?: string        // hex string e.g. '#F5F0E8', default linen
   wall?: PhysicalWall // DEPRECATED: kept for backward compat migration
 }
 

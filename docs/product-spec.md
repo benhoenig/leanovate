@@ -66,6 +66,7 @@ LEANOVATE replaces this fragmented process with a unified internal tool where de
 | **Cost summary** | Auto-calculated breakdown of furniture costs (updates in real time as items are added/removed) + manually entered renovation/finish estimates. |
 | **Daily link validity recheck** | System automatically rechecks product source links on a daily schedule to detect inactive/delisted products (especially common on Shopee). Flagged items are visually marked for designers. Price changes are auto-updated. Admin receives a summary of newly flagged items. |
 | **Role-based access** | Admin: full access + template promotion + catalog approval + team management. Designer: project creation + personal templates + personal draft items. |
+| **Construction drawing export** | "Export Drawings" generates a PDF construction document set: top-down floor plan + 4 elevation views (front, left, right, back). All views include dimension lines in cm — wall lengths, door/window widths, heights, sill heights, distances between elements, ceiling height, and a scale indicator. These are the working drawings that contractors need to execute the interior fit-out accurately. |
 
 ---
 

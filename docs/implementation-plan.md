@@ -241,6 +241,15 @@ The finishing touches that make it production-ready for the team.
   - Admin dashboard surfaces newly flagged items
 - Admin project access: view and manage all projects across team
 - Responsive polish: tablet bottom sheet for right panel, mobile presentation mode
+- Construction drawing export (floor plan + elevations):
+  - "Export Drawings" button in editor toolbar → generates a set of dimensioned orthographic views
+  - **Floor plan** (top-down): room polygon outline, door swings, window positions, all wall lengths in cm, door/window widths, distances between elements
+  - **Elevation drawings** (front, left, right, back): flat wall-face views showing wall heights, door/window positions with height and sill dimensions, ceiling height, finish boundaries
+  - All dimensions labeled in cm with dimension lines (extension lines + arrows)
+  - Rendered client-side on a PixiJS offscreen canvas (or SVG) at print resolution
+  - Export as PDF (multi-page: floor plan + 4 elevations) and/or PNG per view
+  - Includes room name, project name, scale indicator (e.g. 1:50), and date
+  - These are the **construction documents** (CD set / working drawings) that contractors need to execute the interior fit-out accurately
 
 **What to test:**
 - Design a furnished room → click "Preview Room" → wait 5–10 seconds → see realistic interior vignette in modal showing all furniture with finishes
@@ -248,6 +257,7 @@ The finishing touches that make it production-ready for the team.
 - Invite a new designer by email → they sign up → appear in team list as designer
 - Wait for daily recheck to run → check admin dashboard → see flagged items with inactive links or changed prices
 - Open the app on a tablet → present a project to a (pretend) client using the room preview
+- Click "Export Drawings" → download PDF with floor plan + 4 elevation views, all dimensions in cm, door/window positions labeled, scale indicator shown
 
 **Reference docs:** `product-spec.md` (user stories #11, #19–20, #22–23), `schema.md` (rooms.preview_image_url, furniture_variants link recheck fields), `integration-contracts.md` (room perspective preview, daily link recheck), `design.md` (alert banner styling)
 
@@ -293,5 +303,6 @@ When all 6 phases are complete, LEANOVATE supports the full workflow:
 6. Manually swaps individual items or colors
 7. Views live cost summary with furniture + renovation totals
 8. Clicks "Preview Room" → sees an eye-level interior vignette
-9. Presents the isometric view + vignette + cost summary to the client
-10. Admin manages the catalog, approves new items, monitors link health
+9. Exports construction drawings (floor plan + elevations with dimensions) for the contractor
+10. Presents the isometric view + vignette + cost summary to the client
+11. Admin manages the catalog, approves new items, monitors link health
