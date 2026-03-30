@@ -91,9 +91,11 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       color: new THREE.Color(floorColor),
       roughness: 0.7,
       metalness: 0.05,
+      side: THREE.DoubleSide,
     })
     const floorMesh = new THREE.Mesh(floorGeo, floorMat)
-    floorMesh.rotation.x = -Math.PI / 2 // Lay flat on XZ plane
+    // +π/2 maps shape (u,v) → world (u, 0, v) keeping V→+Z consistent
+    floorMesh.rotation.x = Math.PI / 2
     floorMesh.receiveShadow = true
     scene.add(floorMesh)
 
@@ -103,9 +105,10 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       color: 0xFAFAFA,
       roughness: 0.9,
       metalness: 0,
+      side: THREE.DoubleSide,
     })
     const ceilingMesh = new THREE.Mesh(ceilingGeo, ceilingMat)
-    ceilingMesh.rotation.x = -Math.PI / 2
+    ceilingMesh.rotation.x = Math.PI / 2
     ceilingMesh.position.y = ceilingH
     scene.add(ceilingMesh)
 
@@ -132,9 +135,9 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const midV = (a.v + b.v) / 2
       wall.position.set(midU, ceilingH / 2, midV)
 
-      // Rotate to face correct direction
+      // Rotate to align plane width with wall direction
       const angle = Math.atan2(b.v - a.v, b.u - a.u)
-      wall.rotation.y = -angle + Math.PI / 2
+      wall.rotation.y = -angle
 
       wall.receiveShadow = true
       scene.add(wall)
@@ -241,6 +244,18 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
     let camPos: { u: number; v: number }
     let lookTarget: { u: number; v: number }
 
+    // Compute inward offset from a wall point
+    const offsetInward = (wu: number, wv: number, wallDu: number, wallDv: number, dist: number) => {
+      // Inward normal for CCW winding: (-dv, du) normalized
+      const normalU = -wallDv
+      const normalV = wallDu
+      const normalLen = Math.sqrt(normalU ** 2 + normalV ** 2)
+      return {
+        u: wu + (normalU / normalLen) * dist,
+        v: wv + (normalV / normalLen) * dist,
+      }
+    }
+
     if (doors.length > 0) {
       // Stand at the first door, looking inward
       const door = doors[0]
@@ -250,18 +265,7 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const doorU = wa.u + (wb.u - wa.u) * door.position
       const doorV = wa.v + (wb.v - wa.v) * door.position
 
-      // Offset slightly inward from the wall
-      const wallDu = wb.u - wa.u
-      const wallDv = wb.v - wa.v
-      // Inward normal (into the room for CCW winding)
-      const normalU = -(wallDv)
-      const normalV = wallDu
-      const normalLen = Math.sqrt(normalU ** 2 + normalV ** 2)
-
-      camPos = {
-        u: doorU + (normalU / normalLen) * 0.5,
-        v: doorV + (normalV / normalLen) * 0.5,
-      }
+      camPos = offsetInward(doorU, doorV, wb.u - wa.u, wb.v - wa.v, 1.0)
       lookTarget = centroid
     } else {
       // Fallback: position at first wall midpoint, looking at centroid
@@ -270,17 +274,7 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const midU = (wa.u + wb.u) / 2
       const midV = (wa.v + wb.v) / 2
 
-      // Offset inward
-      const wallDu = wb.u - wa.u
-      const wallDv = wb.v - wa.v
-      const normalU = -(wallDv)
-      const normalV = wallDu
-      const normalLen = Math.sqrt(normalU ** 2 + normalV ** 2)
-
-      camPos = {
-        u: midU + (normalU / normalLen) * 0.5,
-        v: midV + (normalV / normalLen) * 0.5,
-      }
+      camPos = offsetInward(midU, midV, wb.u - wa.u, wb.v - wa.v, 1.0)
       lookTarget = centroid
     }
 
