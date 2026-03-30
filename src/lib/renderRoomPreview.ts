@@ -532,11 +532,10 @@ async function renderHDPreview(params: RenderParams): Promise<RenderResult> {
   const { onProgress, abortSignal } = params
   const { renderer, scene, camera, canvas, warnings } = await buildRoomScene(params)
 
-  // Use a much lower resolution for path tracing. Each sample traces every
-  // pixel so fewer pixels = dramatically faster per sample. 480×270 is 16×
-  // fewer pixels than 1920×1080 but path-traced lighting still reads well.
-  const HD_WIDTH = 480
-  const HD_HEIGHT = 270
+  // Reduced resolution for path tracing — each sample traces every pixel.
+  // 960×540 balances quality with performance.
+  const HD_WIDTH = 960
+  const HD_HEIGHT = 540
   canvas.width = HD_WIDTH
   canvas.height = HD_HEIGHT
   renderer.setSize(HD_WIDTH, HD_HEIGHT)
@@ -646,8 +645,8 @@ async function renderHDPreview(params: RenderParams): Promise<RenderResult> {
     // ── Progressive rendering loop ───────────────────────────────────────────
     // Yield to browser every sample so the UI stays responsive. Report progress
     // with preview images every REPORT_INTERVAL samples.
-    const TARGET_SAMPLES = 32
-    const REPORT_INTERVAL = 4
+    const TARGET_SAMPLES = 128
+    const REPORT_INTERVAL = 8
     const MAX_TIME_MS = 30000 // 30s hard cap
     const startTime = Date.now()
 
