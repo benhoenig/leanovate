@@ -362,7 +362,7 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
 
       const maxModelDim = Math.max(modelSize.x, modelSize.y, modelSize.z)
       const maxTargetDim = Math.max(targetW, targetD, targetH)
-      const scale = maxTargetDim / maxModelDim
+      const scale = (maxTargetDim / maxModelDim) * (pf.scale_factor ?? 1)
 
       model.scale.setScalar(scale)
       model.position.sub(modelCenter.multiplyScalar(scale))

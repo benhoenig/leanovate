@@ -393,7 +393,7 @@ async function loadTex(url: string): Promise<Texture> {
   } catch { return Texture.EMPTY }
 }
 
-function getItemScale(itemId: string, variantId: string): number {
+function getItemScale(itemId: string, variantId: string, customScale: number = 1): number {
   const cat = useCatalogStore.getState()
   const variants = cat.getVariantsForItem(itemId)
   const variant = variants.find((v) => v.id === variantId)
@@ -403,7 +403,7 @@ function getItemScale(itemId: string, variantId: string): number {
     variant?.depth_cm ?? item?.depth_cm ?? 60,
     variant?.height_cm ?? item?.height_cm ?? 60,
   )
-  return (maxCm / 100) * T / SPRITE_SIZE
+  return (maxCm / 100) * T / SPRITE_SIZE * customScale
 }
 
 async function drawFurnitureLayer(
@@ -436,7 +436,7 @@ async function drawFurnitureLayer(
 
     const spr = new Sprite(tex)
     spr.anchor.set(0.5, 0.85)
-    spr.scale.set(getItemScale(item.furniture_item_id, item.selected_variant_id))
+    spr.scale.set(getItemScale(item.furniture_item_id, item.selected_variant_id, item.scale_factor ?? 1))
 
     const rp = rotatePoint(item.x, item.y, bboxW, bboxD, rot)
     const pos = roomToScreen(rp.u, rp.v, front)

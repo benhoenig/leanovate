@@ -175,6 +175,7 @@ export interface PlacedFurniture {
   y: number
   direction: Direction
   price_at_placement: number | null
+  scale_factor: number
   sort_order: number
   created_at: string
 }

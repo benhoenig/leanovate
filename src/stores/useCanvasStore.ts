@@ -38,6 +38,7 @@ interface CanvasState {
 
   moveItem: (id: string, roomX: number, roomY: number) => void
   rotateItem: (id: string) => void
+  scaleItem: (id: string, scaleFactor: number) => void
   switchVariant: (id: string, variantId: string, price: number | null) => void
   removeItem: (id: string) => Promise<void>
 
@@ -90,6 +91,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           direction: item.direction,
           selected_variant_id: item.selected_variant_id,
           price_at_placement: item.price_at_placement,
+          scale_factor: item.scale_factor,
           sort_order: item.sort_order,
         })
         .eq('id', item.id)
@@ -212,6 +214,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       .eq('id', id)
       .then(({ error }) => {
         if (error) console.error('moveItem DB:', error)
+      })
+  },
+
+  scaleItem: (id, scaleFactor) => {
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, scale_factor: scaleFactor } : i
+      ),
+    }))
+    supabase
+      .from('placed_furniture')
+      .update({ scale_factor: scaleFactor })
+      .eq('id', id)
+      .then(({ error }) => {
+        if (error) console.error('scaleItem DB:', error)
       })
   },
 

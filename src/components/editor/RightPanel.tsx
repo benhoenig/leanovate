@@ -55,8 +55,8 @@ export default function RightPanel() {
 
 // ── Furniture Properties ──────────────────────────────────────────────────────
 
-function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; direction: string; price_at_placement: number | null } }) {
-  const { rotateItem, switchVariant, removeItem } = useCanvasStore()
+function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; direction: string; price_at_placement: number | null; scale_factor: number } }) {
+  const { rotateItem, scaleItem, switchVariant, removeItem } = useCanvasStore()
   const catalogState = useCatalogStore()
   const item = catalogState.items.find((i) => i.id === placed.furniture_item_id)
   const variants = catalogState.getVariantsForItem(placed.furniture_item_id)
@@ -135,6 +135,33 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
         <span className="section-title">DETAILS</span>
         {formattedPrice && <div className="fp-price">{formattedPrice}</div>}
         {dims && <div className="fp-dims">{dims} cm</div>}
+        <div className="fp-scale-row">
+          <label className="fp-scale-label">Size</label>
+          <input
+            type="range"
+            min={50}
+            max={200}
+            step={5}
+            value={Math.round((placed.scale_factor ?? 1) * 100)}
+            onChange={(e) => scaleItem(placed.id, parseInt(e.target.value) / 100)}
+            className="fp-scale-slider"
+          />
+          <div className="fp-scale-input-wrap">
+            <input
+              type="number"
+              min={50}
+              max={200}
+              step={5}
+              value={Math.round((placed.scale_factor ?? 1) * 100)}
+              onChange={(e) => {
+                const v = parseInt(e.target.value)
+                if (!isNaN(v) && v >= 50 && v <= 200) scaleItem(placed.id, v / 100)
+              }}
+              className="fp-scale-input"
+            />
+            <span className="fp-scale-pct">%</span>
+          </div>
+        </div>
         <div className="fp-direction">Facing: {placed.direction.replace('_', ' ')}</div>
         {sourceUrl && sourceUrl !== 'manual' && (
           <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="fp-link">
@@ -695,6 +722,60 @@ const panelStyle = `
     color: var(--color-primary-brand);
   }
   .fp-dims {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+  }
+  .fp-scale-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 4px;
+  }
+  .fp-scale-label {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    width: 28px;
+  }
+  .fp-scale-slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--color-border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  .fp-scale-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-primary-brand);
+    cursor: pointer;
+  }
+  .fp-scale-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+  }
+  .fp-scale-input {
+    width: 38px;
+    padding: 2px 3px;
+    font-size: 11px;
+    text-align: right;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-input-bg, #F8F6F3);
+    color: var(--color-text-primary);
+    outline: none;
+  }
+  .fp-scale-input:focus {
+    border-color: var(--color-primary-brand);
+  }
+  .fp-scale-pct {
     font-size: 11px;
     color: var(--color-text-secondary);
   }
