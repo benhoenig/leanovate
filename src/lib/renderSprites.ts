@@ -171,8 +171,29 @@ async function renderIsometricSprites(
     )
   })
 
-  // Center and normalize model scale
+  // Fix dark PBR materials — TRELLIS .glb files use MeshStandardMaterial
+  // with metalness that looks black without an environment map.
+  // Clamp metalness and boost material brightness so sprites match product photos.
   const model = gltf.scene
+  model.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh) {
+      const mat = (child as THREE.Mesh).material
+      const materials = Array.isArray(mat) ? mat : [mat]
+      for (const m of materials) {
+        if (m instanceof THREE.MeshStandardMaterial) {
+          m.metalness = Math.min(m.metalness, 0.3)
+          m.roughness = Math.max(m.roughness, 0.4)
+          // Slight emissive boost to prevent overly dark areas
+          if (!m.emissive || m.emissive.getHex() === 0x000000) {
+            m.emissive = m.color.clone().multiplyScalar(0.15)
+          }
+          m.needsUpdate = true
+        }
+      }
+    }
+  })
+
+  // Center and normalize model scale
   const box = new THREE.Box3().setFromObject(model)
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())

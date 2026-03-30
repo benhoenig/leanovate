@@ -125,8 +125,10 @@ export default function CatalogOverview() {
 
   const catMap = new Map(categories.map((c) => [c.id, c.name]))
 
+  const [cacheBust, setCacheBust] = useState(Date.now())
+
   const getSpriteUrl = (path: string) =>
-    supabase.storage.from('sprites').getPublicUrl(path).data.publicUrl
+    supabase.storage.from('sprites').getPublicUrl(path).data.publicUrl + `?t=${cacheBust}`
 
   const handleRegenerateBg = async (variantId: string) => {
     setConfirmAction(null)
@@ -176,6 +178,7 @@ export default function CatalogOverview() {
         await supabase.from('furniture_variants').update({ render_status: 'failed' }).eq('id', variant.id)
       }
       await reloadData()
+      setCacheBust(Date.now()) // Bust CDN cache for sprite URLs
     } catch (err) {
       console.error('[RegenerateSprites] Unexpected error:', err)
     }
