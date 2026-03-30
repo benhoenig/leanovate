@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Link2, AlertTriangle, CheckCircle, HelpCircle } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { Link2, AlertTriangle, CheckCircle, HelpCircle, RefreshCw, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { FurnitureVariant } from '@/types'
 
@@ -7,34 +7,87 @@ interface VariantWithItemName extends FurnitureVariant {
   item_name: string
 }
 
+interface RecheckResult {
+  success: boolean
+  checked: number
+  updated: number
+  newly_inactive: number
+  price_changes: number
+  errors: number
+}
+
+async function invokeEdgeFunction(fnName: string, body: Record<string, unknown> = {}): Promise<{ data: unknown; error: string | null }> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${fnName}`
+  const token = localStorage.getItem('sb-auth-token')
+  let bearerToken = ''
+  if (token) {
+    try { bearerToken = JSON.parse(token).access_token } catch { bearerToken = token }
+  }
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${bearerToken}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify(body),
+    })
+    const data = await resp.json()
+    if (!resp.ok) return { data: null, error: data.error || `HTTP ${resp.status}` }
+    return { data, error: null }
+  } catch (err) {
+    return { data: null, error: String(err) }
+  }
+}
+
 export default function LinkHealthOverview() {
   const [variants, setVariants] = useState<VariantWithItemName[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isRechecking, setIsRechecking] = useState(false)
+  const [recheckResult, setRecheckResult] = useState<RecheckResult | null>(null)
+  const [recheckError, setRecheckError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const load = async () => {
-      setIsLoading(true)
-      // Load all variants with their parent item name
-      const { data, error } = await supabase
-        .from('furniture_variants')
-        .select('*, furniture_items!inner(name)')
-        .order('last_checked_at', { ascending: true, nullsFirst: true })
+  const loadVariants = useCallback(async () => {
+    setIsLoading(true)
+    const { data, error } = await supabase
+      .from('furniture_variants')
+      .select('*, furniture_items!inner(name)')
+      .order('last_checked_at', { ascending: true, nullsFirst: true })
 
-      if (error) { console.error('LinkHealth load error:', error); setIsLoading(false); return }
+    if (error) { console.error('LinkHealth load error:', error); setIsLoading(false); return }
 
-      const mapped: VariantWithItemName[] = (data ?? []).map((row: Record<string, unknown>) => {
-        const itemData = row.furniture_items as { name: string } | null
-        return {
-          ...row,
-          item_name: itemData?.name ?? 'Unknown',
-        } as VariantWithItemName
-      })
+    const mapped: VariantWithItemName[] = (data ?? []).map((row: Record<string, unknown>) => {
+      const itemData = row.furniture_items as { name: string } | null
+      return {
+        ...row,
+        item_name: itemData?.name ?? 'Unknown',
+      } as VariantWithItemName
+    })
 
-      setVariants(mapped)
-      setIsLoading(false)
-    }
-    load()
+    setVariants(mapped)
+    setIsLoading(false)
   }, [])
+
+  useEffect(() => { loadVariants() }, [loadVariants])
+
+  const handleRecheck = async () => {
+    setIsRechecking(true)
+    setRecheckResult(null)
+    setRecheckError(null)
+
+    const { data, error } = await invokeEdgeFunction('recheck-links', { batch_size: 50 })
+    setIsRechecking(false)
+
+    if (error) {
+      setRecheckError(error)
+      return
+    }
+
+    setRecheckResult(data as RecheckResult)
+    // Reload variant data to refresh summary cards
+    loadVariants()
+  }
 
   const activeCount = variants.filter((v) => v.link_status === 'active').length
   const inactiveCount = variants.filter((v) => v.link_status === 'inactive').length
@@ -73,6 +126,37 @@ export default function LinkHealthOverview() {
           <span className="link-card-value">{priceChangedCount}</span>
           <span className="link-card-label">Price Changed</span>
         </div>
+      </div>
+
+      {/* Recheck action */}
+      <div className="recheck-section">
+        <button
+          className="recheck-btn"
+          onClick={handleRecheck}
+          disabled={isRechecking}
+        >
+          {isRechecking ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          {isRechecking ? 'Checking links…' : 'Run Recheck Now'}
+        </button>
+
+        {recheckResult && (
+          <div className="recheck-result">
+            <CheckCircle size={14} />
+            <span>
+              Checked {recheckResult.checked} · Updated {recheckResult.updated}
+              {recheckResult.newly_inactive > 0 && ` · ${recheckResult.newly_inactive} newly inactive`}
+              {recheckResult.price_changes > 0 && ` · ${recheckResult.price_changes} price changes`}
+              {recheckResult.errors > 0 && ` · ${recheckResult.errors} errors`}
+            </span>
+          </div>
+        )}
+
+        {recheckError && (
+          <div className="recheck-error">
+            <AlertTriangle size={14} />
+            <span>{recheckError}</span>
+          </div>
+        )}
       </div>
 
       {/* Flagged items */}
@@ -257,6 +341,58 @@ export default function LinkHealthOverview() {
           text-align: right;
           flex-shrink: 0;
         }
+        .recheck-section {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .recheck-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 16px;
+          border-radius: 8px;
+          border: 1.5px solid var(--color-primary-brand);
+          background: transparent;
+          color: var(--color-primary-brand);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          align-self: flex-start;
+        }
+        .recheck-btn:hover:not(:disabled) {
+          background: var(--color-primary-brand);
+          color: white;
+        }
+        .recheck-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        .recheck-result {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--color-success);
+          padding: 8px 12px;
+          border-radius: 8px;
+          background: rgba(76, 175, 130, 0.08);
+        }
+        .recheck-error {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--color-error);
+          padding: 8px 12px;
+          border-radius: 8px;
+          background: rgba(229, 77, 66, 0.08);
+        }
+        @keyframes spin { to { transform: rotate(360deg) } }
+        .spin { animation: spin 1s linear infinite; }
       `}</style>
     </div>
   )

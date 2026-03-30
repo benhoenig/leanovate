@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Boxes, ArrowLeft, Save, Eye } from 'lucide-react'
+import { Boxes, ArrowLeft, Save, Eye, FileText } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -11,6 +11,7 @@ import RightPanel from '@/components/editor/RightPanel'
 import IsometricCanvas from '@/components/editor/IsometricCanvas'
 import RotationControls from '@/components/editor/RotationControls'
 import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
+import ConstructionDrawingModal from '@/components/editor/ConstructionDrawingModal'
 
 export default function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -23,6 +24,7 @@ export default function EditorPage() {
   const isDragging = useCanvasStore((s) => s.isDragging)
 
   const [showPreview, setShowPreview] = useState(false)
+  const [showDrawings, setShowDrawings] = useState(false)
 
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
 
@@ -117,6 +119,15 @@ export default function EditorPage() {
             <span className="placement-badge">Click on a wall to place {fixturePlacementType} — Esc to cancel</span>
           )}
           <button
+            className="editor-drawings-btn"
+            onClick={() => setShowDrawings(true)}
+            disabled={!selectedRoom}
+            title="Export Construction Drawings"
+          >
+            <FileText size={14} />
+            Drawings
+          </button>
+          <button
             className="editor-preview-btn"
             onClick={() => setShowPreview(true)}
             disabled={!selectedRoom}
@@ -138,6 +149,7 @@ export default function EditorPage() {
 
       {/* Room Preview Modal */}
       {showPreview && <RoomPreviewModal onClose={() => setShowPreview(false)} />}
+      {showDrawings && <ConstructionDrawingModal onClose={() => setShowDrawings(false)} />}
 
       {/* Editor Body */}
       <div className="editor-body">
@@ -247,6 +259,32 @@ export default function EditorPage() {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+
+        .editor-drawings-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 6px 14px;
+          border-radius: 7px;
+          border: 1.5px solid var(--color-border-custom);
+          background: none;
+          color: var(--color-text-secondary);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+
+        .editor-drawings-btn:hover:not(:disabled) {
+          border-color: var(--color-primary-brand);
+          color: var(--color-primary-brand);
+        }
+
+        .editor-drawings-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
         }
 
         .editor-preview-btn {
