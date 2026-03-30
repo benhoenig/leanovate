@@ -233,16 +233,18 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
 
     // ── Camera ───────────────────────────────────────────────────────────────
     const camera = new THREE.PerspectiveCamera(
-      65, // FOV
-      PREVIEW_WIDTH / PREVIEW_HEIGHT, // aspect
+      75, // Wide FOV for small room interiors
+      PREVIEW_WIDTH / PREVIEW_HEIGHT,
       0.1,
       100
     )
 
-    // Position camera: try to find a door position, otherwise use a wall midpoint
+    const EYE_HEIGHT = 1.6 // 160cm standing height
+    const WALL_OFFSET = 0.35 // Stand close to wall (like real interior photos)
+
+    // Position camera: try to find a door position, otherwise use a corner
     const doors = room.geometry?.doors ?? []
     let camPos: { u: number; v: number }
-    let lookTarget: { u: number; v: number }
 
     // Compute inward offset from a wall point
     const offsetInward = (wu: number, wv: number, wallDu: number, wallDv: number, dist: number) => {
@@ -250,6 +252,7 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const normalU = -wallDv
       const normalV = wallDu
       const normalLen = Math.sqrt(normalU ** 2 + normalV ** 2)
+      if (normalLen < 0.001) return { u: wu, v: wv }
       return {
         u: wu + (normalU / normalLen) * dist,
         v: wv + (normalV / normalLen) * dist,
@@ -257,7 +260,7 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
     }
 
     if (doors.length > 0) {
-      // Stand at the first door, looking inward
+      // Stand at the first door, just inside the room
       const door = doors[0]
       const wallIdx = door.wall_index ?? 0
       const wa = vertices[wallIdx % vertices.length]
@@ -265,21 +268,27 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const doorU = wa.u + (wb.u - wa.u) * door.position
       const doorV = wa.v + (wb.v - wa.v) * door.position
 
-      camPos = offsetInward(doorU, doorV, wb.u - wa.u, wb.v - wa.v, 1.0)
-      lookTarget = centroid
+      camPos = offsetInward(doorU, doorV, wb.u - wa.u, wb.v - wa.v, WALL_OFFSET)
     } else {
-      // Fallback: position at first wall midpoint, looking at centroid
+      // Fallback: stand at first vertex corner, offset inward along both adjacent walls
       const wa = vertices[0]
       const wb = vertices[1]
-      const midU = (wa.u + wb.u) / 2
-      const midV = (wa.v + wb.v) / 2
+      const wc = vertices[vertices.length - 1]
 
-      camPos = offsetInward(midU, midV, wb.u - wa.u, wb.v - wa.v, 1.0)
-      lookTarget = centroid
+      // Offset along wall 0→1
+      const off1 = offsetInward(wa.u, wa.v, wb.u - wa.u, wb.v - wa.v, WALL_OFFSET)
+      // Also offset along wall (last)→0
+      const off2 = offsetInward(wa.u, wa.v, wa.u - wc.u, wa.v - wc.v, WALL_OFFSET)
+
+      camPos = {
+        u: wa.u + (off1.u - wa.u) + (off2.u - wa.u),
+        v: wa.v + (off1.v - wa.v) + (off2.v - wa.v),
+      }
     }
 
-    camera.position.set(camPos.u, 1.6, camPos.v) // 160cm eye height
-    camera.lookAt(lookTarget.u, 1.0, lookTarget.v) // Look at ~1m height (table level)
+    camera.position.set(camPos.u, EYE_HEIGHT, camPos.v)
+    // Look at centroid at nearly eye-level (slight downward gaze to see furniture)
+    camera.lookAt(centroid.u, EYE_HEIGHT * 0.85, centroid.v)
 
     // ── Render ───────────────────────────────────────────────────────────────
     renderer.render(scene, camera)
