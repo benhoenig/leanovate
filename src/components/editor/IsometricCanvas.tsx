@@ -415,6 +415,7 @@ async function drawFurnitureLayer(
   selectedId: string | null,
   onSelect: (id: string) => void,
   onDragStart: (id: string) => void,
+  isStale?: () => boolean,
 ) {
   container.removeChildren()
 
@@ -426,13 +427,14 @@ async function drawFurnitureLayer(
   })
 
   for (const item of sorted) {
+    if (isStale?.()) return
     const dir = apparentDirection(item.direction, rot)
     const url = getSpriteUrl(item.selected_variant_id, dir)
       ?? getFallbackUrl(item.selected_variant_id, item.furniture_item_id)
     if (!url) continue
 
     const tex = await loadTex(url)
-    if (tex === Texture.EMPTY) continue
+    if (isStale?.() || tex === Texture.EMPTY) continue
 
     const spr = new Sprite(tex)
     spr.anchor.set(0.5, 0.85)
@@ -505,6 +507,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
 
   const roomRef = useRef(room)
   const matsRef = useRef(finishMaterials)
+  const redrawVersionRef = useRef(0)
   useEffect(() => { roomRef.current = room }, [room])
   useEffect(() => { matsRef.current = finishMaterials }, [finishMaterials])
 
@@ -513,6 +516,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
     const rl = roomLayerRef.current
     const fl = furnitureLayerRef.current
     if (!app || !rl || !fl) return
+    const version = ++redrawVersionRef.current
 
     const sw = app.screen.width, sh = app.screen.height
     const wallH = wallHeightPx(roomRef.current.ceiling_height_cm)
@@ -567,6 +571,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         dragRef.current = { active: true, itemId: id }
         state.setDragging(true)
       },
+      () => version !== redrawVersionRef.current,
     )
 
     // ── Shape edit handles ──────────────────────────────────────────────
@@ -770,6 +775,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
   // Subscribe to canvas store
   useEffect(() => {
     const unsub = useCanvasStore.subscribe(() => { redraw() })
+    return unsub
+  }, [redraw])
+
+  // Subscribe to catalog store (sprites/variants needed for rendering)
+  useEffect(() => {
+    const unsub = useCatalogStore.subscribe(() => { redraw() })
     return unsub
   }, [redraw])
 

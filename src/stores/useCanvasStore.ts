@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { PlacedFurniture, Direction } from '@/types'
 import { supabase } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 
 const DIRECTIONS: Direction[] = ['front_left', 'front_right', 'back_right', 'back_left']
 
@@ -223,6 +224,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         i.id === id ? { ...i, scale_factor: scaleFactor } : i
       ),
     }))
+    useProjectStore.setState({ isDirty: true })
     supabase
       .from('placed_furniture')
       .update({ scale_factor: scaleFactor })
