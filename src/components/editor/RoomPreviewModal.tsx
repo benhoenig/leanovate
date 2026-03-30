@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { X, Download, Save, Loader2, AlertTriangle } from 'lucide-react'
-import { renderRoomPreview } from '@/lib/renderRoomPreview'
+import { X, Download, Save, Loader2, AlertTriangle, Zap, Sparkles, Square } from 'lucide-react'
+import { renderRoomPreview, type RenderMode } from '@/lib/renderRoomPreview'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -9,30 +9,45 @@ import { supabase } from '@/lib/supabase'
 import { getVertices } from '@/lib/roomGeometry'
 import type { FurnitureItem } from '@/types'
 
+type PreviewStatus = 'idle' | 'rendering' | 'building_scene' | 'path_tracing' | 'complete' | 'error'
+
 export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
-  const [status, setStatus] = useState<'rendering' | 'complete' | 'error'>('rendering')
+  const [status, setStatus] = useState<PreviewStatus>('idle')
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
   const [selectedWallIdx, setSelectedWallIdx] = useState(0)
+  const [renderMode, setRenderMode] = useState<RenderMode>('fast')
+  const [hdProgress, setHdProgress] = useState({ samples: 0, total: 200 })
+  const [progressImageUrl, setProgressImageUrl] = useState<string | null>(null)
+
   const blobRef = useRef<Blob | null>(null)
   const imageUrlRef = useRef<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const { rooms, selectedRoomId, finishMaterials, updateRoom } = useProjectStore()
   const { showToast } = useUIStore()
   const room = rooms.find((r) => r.id === selectedRoomId) ?? null
   const numWalls = room ? getVertices(room).length : 4
 
-  const renderPreview = useCallback(async (wallIdx: number) => {
+  const isRendering = status === 'rendering' || status === 'building_scene' || status === 'path_tracing'
+
+  const renderPreview = useCallback(async (wallIdx: number, mode: RenderMode) => {
     if (!room) {
       setError('No room selected')
       setStatus('error')
       return
     }
 
-    setStatus('rendering')
+    // Abort any in-progress render
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
+    setStatus(mode === 'hd' ? 'building_scene' : 'rendering')
     setError(null)
+    setProgressImageUrl(null)
+    setHdProgress({ samples: 0, total: 200 })
 
     // Revoke old URL
     if (imageUrlRef.current) {
@@ -44,7 +59,6 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
     const placedFurniture = useCanvasStore.getState().placedFurniture
     const catalog = useCatalogStore.getState()
 
-    // Build lookup maps for the renderer
     const variantsMap: Record<string, typeof catalog.variants[string]> = {}
     const itemsMap: Record<string, FurnitureItem> = {}
 
@@ -65,7 +79,16 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
       variants: variantsMap,
       items: itemsMap,
       cameraWallIdx: wallIdx,
+      mode,
+      abortSignal: abortRef.current.signal,
+      onProgress: (samples, total, url) => {
+        setStatus('path_tracing')
+        setHdProgress({ samples, total })
+        setProgressImageUrl(url)
+      },
     })
+
+    if (result.error === 'Cancelled') return
 
     if (result.error || !result.blob) {
       setError(result.error ?? 'Render failed')
@@ -78,30 +101,53 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
     const url = URL.createObjectURL(result.blob)
     imageUrlRef.current = url
     setImageUrl(url)
+    setProgressImageUrl(null)
     setStatus('complete')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room, finishMaterials])
 
   // Initial render
   useEffect(() => {
-    renderPreview(0)
+    renderPreview(0, 'fast')
     return () => {
+      abortRef.current?.abort()
       if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleWallChange = (idx: number) => {
-    if (idx === selectedWallIdx && status !== 'error') return
+    if (idx === selectedWallIdx && !isRendering && status !== 'error') return
     setSelectedWallIdx(idx)
-    renderPreview(idx)
+    renderPreview(idx, renderMode)
+  }
+
+  const handleModeChange = (mode: RenderMode) => {
+    if (mode === renderMode && !isRendering) return
+    setRenderMode(mode)
+    renderPreview(selectedWallIdx, mode)
+  }
+
+  const handleStop = () => {
+    abortRef.current?.abort()
+    // Use the latest progress image as the final result
+    if (progressImageUrl) {
+      setImageUrl(progressImageUrl)
+      setProgressImageUrl(null)
+      setStatus('complete')
+      // Convert data URL to blob for download/save
+      fetch(progressImageUrl)
+        .then((r) => r.blob())
+        .then((b) => { blobRef.current = b })
+    }
   }
 
   const handleDownload = () => {
     if (!imageUrl || !room) return
     const a = document.createElement('a')
     a.href = imageUrl
-    a.download = `${room.name}_wall${selectedWallIdx + 1}_preview.png`
+    const modeLabel = renderMode === 'hd' ? 'hd' : 'preview'
+    a.download = `${room.name}_wall${selectedWallIdx + 1}_${modeLabel}.png`
     a.click()
   }
 
@@ -134,6 +180,9 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // The image to show: final image or progressive HD image
+  const displayImage = imageUrl ?? progressImageUrl
+
   return (
     <div className="preview-overlay" onClick={onClose}>
       <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
@@ -145,22 +194,44 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Wall selector */}
+        {/* Wall selector + Mode toggle */}
         <div className="preview-wall-bar">
-          {Array.from({ length: numWalls }, (_, i) => (
+          <div className="preview-wall-buttons">
+            {Array.from({ length: numWalls }, (_, i) => (
+              <button
+                key={i}
+                className={`preview-wall-btn ${selectedWallIdx === i ? 'active' : ''}`}
+                onClick={() => handleWallChange(i)}
+                disabled={isRendering}
+              >
+                Wall {i + 1}
+              </button>
+            ))}
+          </div>
+
+          <div className="preview-mode-toggle">
             <button
-              key={i}
-              className={`preview-wall-btn ${selectedWallIdx === i ? 'active' : ''}`}
-              onClick={() => handleWallChange(i)}
-              disabled={status === 'rendering'}
+              className={`preview-mode-btn ${renderMode === 'fast' ? 'active' : ''}`}
+              onClick={() => handleModeChange('fast')}
+              disabled={isRendering}
             >
-              Wall {i + 1}
+              <Zap size={12} />
+              Fast
             </button>
-          ))}
+            <button
+              className={`preview-mode-btn ${renderMode === 'hd' ? 'active' : ''}`}
+              onClick={() => handleModeChange('hd')}
+              disabled={isRendering}
+            >
+              <Sparkles size={12} />
+              HD
+            </button>
+          </div>
         </div>
 
         {/* Content */}
         <div className="preview-content">
+          {/* Loading state for fast mode */}
           {status === 'rendering' && (
             <div className="preview-loading">
               <Loader2 size={32} className="preview-spinner" />
@@ -169,6 +240,16 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
+          {/* Loading state for HD mode — BVH building */}
+          {status === 'building_scene' && (
+            <div className="preview-loading">
+              <Loader2 size={32} className="preview-spinner" />
+              <p>Preparing HD render…</p>
+              <p className="preview-loading-hint">Building ray tracing acceleration structure</p>
+            </div>
+          )}
+
+          {/* Error state */}
           {status === 'error' && (
             <div className="preview-error">
               <AlertTriangle size={32} />
@@ -177,7 +258,8 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {status === 'complete' && imageUrl && (
+          {/* HD progressive rendering — show refining image */}
+          {status === 'path_tracing' && progressImageUrl && (
             <>
               {warnings.length > 0 && (
                 <div className="preview-warnings">
@@ -186,7 +268,39 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
               <img
-                src={imageUrl}
+                src={progressImageUrl}
+                alt="HD render in progress"
+                className="preview-image"
+              />
+              <div className="preview-hd-progress">
+                <div className="hd-progress-bar">
+                  <div
+                    className="hd-progress-fill"
+                    style={{ width: `${(hdProgress.samples / hdProgress.total) * 100}%` }}
+                  />
+                </div>
+                <div className="hd-progress-text">
+                  <span>HD Rendering: {hdProgress.samples} / {hdProgress.total} samples</span>
+                  <button className="hd-stop-btn" onClick={handleStop}>
+                    <Square size={10} />
+                    Stop & Use Current
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Complete state */}
+          {status === 'complete' && displayImage && (
+            <>
+              {warnings.length > 0 && (
+                <div className="preview-warnings">
+                  <AlertTriangle size={14} />
+                  <span>{warnings.length} item{warnings.length !== 1 ? 's' : ''} could not be rendered (missing 3D models)</span>
+                </div>
+              )}
+              <img
+                src={displayImage}
                 alt="Room perspective preview"
                 className="preview-image"
               />
@@ -262,10 +376,17 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
         }
         .preview-wall-bar {
           display: flex;
-          gap: 6px;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
           padding: 10px 16px;
           border-bottom: 1px solid var(--color-border-custom);
           background: var(--color-card-bg);
+          flex-wrap: wrap;
+        }
+        .preview-wall-buttons {
+          display: flex;
+          gap: 6px;
           flex-wrap: wrap;
         }
         .preview-wall-btn {
@@ -290,6 +411,40 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           color: white;
         }
         .preview-wall-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .preview-mode-toggle {
+          display: flex;
+          gap: 4px;
+          background: var(--color-hover-bg);
+          padding: 3px;
+          border-radius: 8px;
+        }
+        .preview-mode-btn {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 5px 12px;
+          border-radius: 6px;
+          border: none;
+          background: none;
+          color: var(--color-text-secondary);
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+        .preview-mode-btn:hover:not(:disabled) {
+          color: var(--color-text-primary);
+        }
+        .preview-mode-btn.active {
+          background: linear-gradient(135deg, #2BA8A0, #238C85);
+          color: white;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .preview-mode-btn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
@@ -363,6 +518,50 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           max-height: 70vh;
           object-fit: contain;
           padding: 8px;
+        }
+        .preview-hd-progress {
+          width: 100%;
+          padding: 0 16px 8px;
+        }
+        .hd-progress-bar {
+          width: 100%;
+          height: 4px;
+          background: var(--color-border-custom);
+          border-radius: 2px;
+          overflow: hidden;
+        }
+        .hd-progress-fill {
+          height: 100%;
+          background: linear-gradient(135deg, #2BA8A0, #238C85);
+          border-radius: 2px;
+          transition: width 0.3s ease;
+        }
+        .hd-progress-text {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 6px;
+          font-size: 11px;
+          color: var(--color-text-secondary);
+        }
+        .hd-stop-btn {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 10px;
+          border-radius: 6px;
+          border: 1.5px solid var(--color-secondary, #F2735A);
+          background: none;
+          color: var(--color-secondary, #F2735A);
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+        .hd-stop-btn:hover {
+          background: var(--color-secondary, #F2735A);
+          color: white;
         }
         .preview-footer {
           display: flex;

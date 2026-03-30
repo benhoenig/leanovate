@@ -233,34 +233,43 @@
 
 ## 8. Room Perspective Preview
 
-**Purpose:** Render a single eye-level interior vignette — a realistic 3D perspective image of the current room, showing all placed furniture, room geometry, and finishes as if standing inside the unit at human eye height (~160cm). Used for client presentations.
+**Purpose:** Render eye-level interior vignettes — realistic 3D perspective images of the current room, showing all placed furniture, room geometry (walls with door/window cutouts), and finishes. User can select which wall to view from via wall selector buttons. Used for client presentations.
 
-**Triggered by:** Designer clicks "Preview Room" button.
+**Triggered by:** Designer clicks "Preview Room" button and selects a wall from the wall selector.
 
 **Send:**
 - Room geometry (walls, floor, ceiling dimensions from `rooms` table)
-- Room finishes (wall color/material, floor material, etc.)
+- Room finishes (wall color/material, floor material, door style, window style)
 - All placed furniture in the room: .glb file paths + positions + directions + selected variant
-- Camera angle: automatic "standing in doorway" perspective, or a sensible default based on room shape
+- Camera wall index: which wall segment the camera stands at (0 to N-1, user-selected)
 
-**Rendered by:** Three.js server-side (Supabase Edge Function or dedicated render service)
+**Rendered by:** Three.js client-side (browser) — implemented in `src/lib/renderRoomPreview.ts`
 
-**Get back:** Single PNG image — eye-level interior vignette with realistic lighting
+**Get back:** Single PNG image (1920×1080) — eye-level interior vignette with realistic lighting
 
-**Where it goes:** Displayed in a modal overlay in the editor. Saved to `thumbnails` bucket in Supabase Storage, URL stored in `rooms.preview_image_url`.
+**Where it goes:** Displayed in a modal overlay (`RoomPreviewModal.tsx`) with wall selector buttons at top. User can download as PNG or save to `thumbnails` bucket in Supabase Storage, URL stored in `rooms.preview_image_url`.
+
+**Wall selector:**
+- N buttons (one per wall segment from `getVertices(room).length`), labeled "Wall 1", "Wall 2", etc.
+- Each button triggers a new render from that wall's perspective
+- Active button: primary brand gradient, white text. Inactive: outline style.
+- Disabled during rendering (loading spinner shown)
 
 **Rendering specs:**
-- Perspective camera (not isometric) — positioned at human eye height (~160cm), simulating standing in the room
-- Room shell built from geometry: floor with selected material texture, walls with selected color/wallpaper, ceiling
-- All placed .glb models loaded at their canvas positions
-- Soft ambient lighting + warm directional light for natural mood
-- Output resolution: high enough for full-screen modal display
+- PerspectiveCamera (FOV 70°) at 160cm eye height, positioned 0.4m inward from selected wall midpoint, looking perpendicular across the room
+- Room shell: floor (ShapeGeometry from polygon vertices), walls (PlaneGeometry or ShapeGeometry with door/window cutouts), ceiling
+- Doors: rectangular cutout holes in walls + brown door panel meshes (MeshStandardMaterial)
+- Windows: rectangular cutout holes + semi-transparent glass panes (opacity 0.3) + grey frame borders
+- All placed .glb models loaded via GLTFLoader, positioned at (u, 0, v), scaled by declared dimensions, rotated by direction
+- Lighting: ambient 0.5 white + warm directional sun (1.0) + cool fill light (0.3) + warm point light at ceiling centroid (0.4)
+- Output: 1920×1080 PNG, horizontally mirrored to correct Three.js camera handedness for CCW-wound rooms
+- All materials use `DoubleSide` rendering
 
-**Render time:** Approximately 5–10 seconds depending on number of furniture pieces.
+**Render time:** Approximately 3–10 seconds depending on number of furniture pieces and .glb model complexity.
 
-**Error handling:** On failure (e.g. missing .glb files for some furniture), render what's available and show a warning: "Some items are still processing and may not appear in the preview."
+**Error handling:** On failure (e.g. missing .glb files for some furniture), render what's available and show a warning banner: "X item(s) could not be rendered (missing 3D models)."
 
-**Post-MVP upgrade path:** Replace static snapshot with interactive 3D walkthrough (full Three.js scene in browser with camera controls).
+**Post-MVP upgrade path:** Replace wall selector with free camera controls or add interactive 3D walkthrough (full Three.js scene in browser).
 
 ---
 

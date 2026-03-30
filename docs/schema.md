@@ -116,7 +116,7 @@ Individual rooms within a project's unit.
 | geometry | jsonb | NOT NULL, default '{}' | Wall segments, door positions, window positions. Consumed by PixiJS canvas as one object. Structure: `{ "walls": [...], "doors": [...], "windows": [...] }` |
 | finishes | jsonb | NOT NULL, default '{}' | Current finish selections. Structure: `{ "wall": { "material_id": "uuid", "custom_url": null }, "floor": { ... }, "door": { ... }, "window": { ... }, "lighting": { ... } }` |
 | sort_order | integer | NOT NULL, default 0 | Display order in the room list |
-| preview_image_url | text | nullable | Last rendered eye-level interior vignette (3D perspective preview). Stored in `thumbnails` bucket. Null until designer clicks "Preview Room" |
+| preview_image_url | text | nullable | Most recently saved eye-level interior vignette (3D perspective preview). Stored in `thumbnails` bucket. Updated each time designer renders a preview and clicks "Save to Project". Null until first save. |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `project_id`

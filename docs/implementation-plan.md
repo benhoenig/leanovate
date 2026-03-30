@@ -222,9 +222,11 @@ The finishing touches that make it production-ready for the team.
 
 - Room perspective preview:
   - "Preview Room" button on canvas
-  - Server-side Three.js loads room geometry + finishes + all placed .glb files
+  - Client-side Three.js (browser) loads room geometry + finishes + all placed .glb files
   - Renders eye-level interior vignette (perspective camera at ~160cm height)
-  - Displays in modal overlay
+  - Wall selector buttons let user view from any wall (Wall 1, Wall 2, ..., Wall N)
+  - Door/window cutouts with 3D door panels and glass panes
+  - Displays in modal overlay with download + save options
   - Saves to `rooms.preview_image_url` in Supabase Storage
 - Admin catalog management:
   - Pending furniture approval queue (approve/reject items submitted by designers)
@@ -252,7 +254,7 @@ The finishing touches that make it production-ready for the team.
   - These are the **construction documents** (CD set / working drawings) that contractors need to execute the interior fit-out accurately
 
 **What to test:**
-- Design a furnished room → click "Preview Room" → wait 5–10 seconds → see realistic interior vignette in modal showing all furniture with finishes
+- Design a furnished room → click "Preview Room" → select a wall from the buttons → wait 3–10 seconds → see interior vignette from that wall with door/window details visible
 - Log in as admin → see pending furniture queue → approve an item → it appears in all designers' catalogs
 - Invite a new designer by email → they sign up → appear in team list as designer
 - Wait for daily recheck to run → check admin dashboard → see flagged items with inactive links or changed prices

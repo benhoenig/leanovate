@@ -19,14 +19,13 @@ Internal isometric room planner for an interior design team serving condo invest
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-Phase 6: Room Preview + Admin + Daily Recheck (Core 3 COMPLETE — remaining: Daily Recheck + Construction Drawing Export)
+ALL 6 PHASES COMPLETE
 <!-- Phase 1: Foundation — COMPLETE (schema + storage buckets in supabase/migrations/20240101000000_full_schema.sql) -->
 <!-- Phase 2: Room Builder — COMPLETE -->
 <!-- Phase 4: Isometric Canvas — COMPLETE (furniture placement, drag, rotate, variant switch, room rotation, right panel properties) -->
 <!-- Phase 3: Furniture Catalog + AI Pipeline — COMPLETE (seed migration, useCatalogStore, CatalogPanel, AddFurnitureModal, ImageApprovalModal, 4 edge functions) -->
 <!-- Phase 5: Templates + Cost Summary — COMPLETE (3-layer templates, cost panel, staleness alerts) -->
-<!-- Phase 6 (partial): Admin + Team Management + Room Preview — COMPLETE -->
-<!-- Remaining Phase 6: Daily Link Recheck + Construction Drawing Export -->
+<!-- Phase 6: Room Preview + Admin + Daily Recheck + Construction Drawing Export — COMPLETE -->
 
 ## Phase 2 Completion Notes
 All Phase 2 verification steps pass. Key implementation details for future reference:
@@ -173,8 +172,8 @@ Full template system (3 layers) + cost summary panel with staleness alerts.
 ### Project Store Update
 - `updateProject` type expanded to include `unit_width_cm | unit_height_cm` (needed by unit template apply)
 
-## Phase 6 Completion Notes (Core 3)
-Admin catalog management, team management, and room perspective preview implemented. Daily link recheck and construction drawing export deferred.
+## Phase 6 Completion Notes
+Admin catalog management, team management, room perspective preview, daily link recheck, and construction drawing export — all implemented.
 
 ### Admin Page (`src/pages/AdminPage.tsx`)
 - 4-tab navigation: Pending | Catalog | Link Health | Team
@@ -196,16 +195,37 @@ Admin catalog management, team management, and room perspective preview implemen
 
 ### Room Perspective Preview
 - **`src/lib/renderRoomPreview.ts`** — Client-side Three.js renderer (same offscreen canvas pattern as renderSprites.ts)
-  - Builds room shell: floor (ShapeGeometry from vertices), walls (PlaneGeometry per segment), ceiling
-  - Applies finish colors from finish_materials table via `getFinishColor()` pattern
+  - Builds room shell: floor (ShapeGeometry from vertices), walls (PlaneGeometry or ShapeGeometry with door/window cutouts), ceiling
+  - Doors: rectangular cutout holes + brown door panel meshes
+  - Windows: rectangular cutout holes + semi-transparent glass panes + grey frames
+  - Applies finish colors from finish_materials table via `getFinishHex()` helper
   - Loads placed furniture .glb models via GLTFLoader, positions at (u, 0, v), scales by dimensions
-  - PerspectiveCamera at 160cm height, positioned near first door (fallback: wall midpoint)
+  - PerspectiveCamera at 160cm height, positioned 0.4m inward from user-selected wall midpoint, looking perpendicular across room
+  - `cameraWallIdx` parameter: caller controls which wall the camera stands at (default 0)
   - Lighting: ambient + warm directional + cool fill + point light at centroid
-  - Output: 1920×1080 PNG blob
+  - Output: 1920×1080 PNG blob, horizontally mirrored to correct Three.js camera handedness for CCW-wound rooms
   - Returns `{ blob, error, warnings }` — warnings list items with missing .glb files
-- **`src/components/editor/RoomPreviewModal.tsx`** — Modal overlay with loading spinner, rendered image, warning banner, Download PNG + Save to Project buttons
+- **`src/components/editor/RoomPreviewModal.tsx`** — Modal overlay with wall selector, loading spinner, rendered image, warning banner, Download PNG + Save to Project buttons
+  - Wall selector button bar: N buttons (one per wall from `getVertices(room).length`), labeled "Wall 1" through "Wall N"
+  - Re-renders on wall selection change with loading spinner
   - "Save to Project" uploads to `thumbnails` bucket, updates `rooms.preview_image_url`
 - **EditorPage changes** — "Preview" button in header (Eye icon), disabled when no room selected
+
+### Daily Link Recheck
+- **`supabase/functions/recheck-links/index.ts`** — Scheduled Edge Function for batch URL checking
+  - Domain-specific checking: Shopee API, IKEA HTML, generic JSON-LD fallback
+  - Updates `link_status`, `last_checked_at`, `price_thb`, `price_changed` (>20% threshold)
+  - Batch size ~50, 8s timeout per URL, 500ms delay between requests
+- **`src/components/admin/LinkHealthOverview.tsx`** — "Run Recheck Now" button + result summary + flagged items list
+
+### Construction Drawing Export
+- **`src/lib/renderConstructionDrawings.ts`** — Client-side Canvas 2D renderer
+  - `renderFloorPlan()`: top-down orthographic view with door swing arcs, window marks, dimension lines on all walls
+  - `renderElevation()`: head-on wall-face view per wall with door/window cutouts and dimension lines
+  - `exportConstructionPDF()`: multi-page PDF via jsPDF (page 1: floor plan landscape, pages 2+: elevations portrait)
+  - Auto-selects scale (1:25/1:50/1:100), includes title blocks with room name, project name, date
+- **`src/components/editor/ConstructionDrawingModal.tsx`** — Modal with rendering progress, preview grid, Download PDF button
+- **EditorPage** — "Drawings" button (FileText icon) in header next to Preview button
 
 ### Route & Navigation Changes
 - `src/App.tsx` — Added `AdminRoute` wrapper + `/admin` route
