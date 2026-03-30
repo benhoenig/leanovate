@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus, Pencil, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
@@ -56,7 +56,8 @@ export default function RightPanel() {
 // ── Furniture Properties ──────────────────────────────────────────────────────
 
 function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; direction: string; price_at_placement: number | null; scale_factor: number } }) {
-  const { rotateItem, scaleItem, switchVariant, removeItem } = useCanvasStore()
+  const { rotateItem, scaleItem, commitScale, switchVariant, removeItem } = useCanvasStore()
+  const scaleBeforeRef = useRef(placed.scale_factor ?? 1)
   const catalogState = useCatalogStore()
   const item = catalogState.items.find((i) => i.id === placed.furniture_item_id)
   const variants = catalogState.getVariantsForItem(placed.furniture_item_id)
@@ -144,6 +145,8 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
             step={5}
             value={Math.round((placed.scale_factor ?? 1) * 100)}
             onChange={(e) => scaleItem(placed.id, parseInt(e.target.value) / 100)}
+            onPointerDown={() => { scaleBeforeRef.current = placed.scale_factor ?? 1 }}
+            onPointerUp={() => { commitScale(placed.id, scaleBeforeRef.current) }}
             className="fp-scale-slider"
           />
           <div className="fp-scale-input-wrap">
@@ -202,9 +205,12 @@ function RoomProperties({ room, updateRoom }: {
   const vertexCount = hasCustomVertices ? geo.vertices!.length : 4
 
   const handleDeleteFixture = (fixtureId: string) => {
+    const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
     const doors = (geo.doors ?? []).filter(d => d.id !== fixtureId)
     const windows = (geo.windows ?? []).filter(w => w.id !== fixtureId)
-    updateRoom(room.id, { geometry: { ...geo, doors, windows } })
+    const nextGeo = { ...geo, doors, windows }
+    updateRoom(room.id, { geometry: nextGeo })
+    useCanvasStore.getState().pushGeometryCommand(room.id, prevGeo, JSON.parse(JSON.stringify(nextGeo)), room.width_cm, room.height_cm, room.width_cm, room.height_cm)
     if (selectedFixtureId === fixtureId) setSelectedFixture(null)
   }
 
@@ -279,9 +285,11 @@ function RoomProperties({ room, updateRoom }: {
           <button
             className="shape-reset-btn"
             onClick={() => {
+              const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
               const newGeo = { ...geo }
               delete newGeo.vertices
               updateRoom(room.id, { geometry: newGeo })
+              useCanvasStore.getState().pushGeometryCommand(room.id, prevGeo, JSON.parse(JSON.stringify(newGeo)), room.width_cm, room.height_cm, room.width_cm, room.height_cm)
               setShapeEditMode(false)
             }}
           >
@@ -376,16 +384,24 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
 
   const blurOnEnter = (e: React.KeyboardEvent) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }
 
+  const pushGeoCmd = (prevGeo: RoomGeometry, nextGeo: RoomGeometry) => {
+    const rm = useProjectStore.getState().rooms.find(r => r.id === roomId)
+    const w = rm?.width_cm ?? 0, h = rm?.height_cm ?? 0
+    useCanvasStore.getState().pushGeometryCommand(roomId, prevGeo, JSON.parse(JSON.stringify(nextGeo)), w, h, w, h)
+  }
+
   const commitWidth = () => {
     const val = parseFloat(widthM)
     if (isNaN(val)) { setWidthM(String(fixture.width_m)); return }
     const clamped = Math.max(0.3, Math.min(3, Math.round(val * 10) / 10))
     setWidthM(String(clamped))
+    const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
     const updated = { ...fixture, width_m: clamped }
     const newGeo = isDoor
       ? { ...geo, doors: (geo.doors ?? []).map(d => d.id === fixtureId ? updated : d) }
       : { ...geo, windows: (geo.windows ?? []).map(w => w.id === fixtureId ? updated : w) }
     updateRoom(roomId, { geometry: newGeo })
+    pushGeoCmd(prevGeo, newGeo)
   }
 
   const commitHeight = () => {
@@ -394,11 +410,13 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
     if (isNaN(val)) { setHeightM(String(fallback)); return }
     const clamped = Math.max(0.3, Math.min(ceilingM, Math.round(val * 10) / 10))
     setHeightM(String(clamped))
+    const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
     const updated = { ...fixture, height_m: clamped }
     const newGeo = isDoor
       ? { ...geo, doors: (geo.doors ?? []).map(d => d.id === fixtureId ? updated : d) }
       : { ...geo, windows: (geo.windows ?? []).map(w => w.id === fixtureId ? updated : w) }
     updateRoom(roomId, { geometry: newGeo })
+    pushGeoCmd(prevGeo, newGeo)
   }
 
   const commitSill = () => {
@@ -406,9 +424,11 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
     if (isNaN(val)) { setSillM(String(win?.sill_m ?? defaultSill)); return }
     const clamped = Math.max(0, Math.min(ceilingM - 0.3, Math.round(val * 10) / 10))
     setSillM(String(clamped))
+    const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
     const updated = { ...fixture, sill_m: clamped }
     const newGeo = { ...geo, windows: (geo.windows ?? []).map(w => w.id === fixtureId ? updated : w) }
     updateRoom(roomId, { geometry: newGeo })
+    pushGeoCmd(prevGeo, newGeo)
   }
 
   return (
@@ -481,11 +501,15 @@ function CurtainControls({ win, geo, roomId, updateRoom }: {
   useEffect(() => { setHexInput(color) }, [color])
 
   const updateWindow = (updates: Partial<RoomWindow>) => {
+    const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
     const newGeo = {
       ...geo,
       windows: (geo.windows ?? []).map(w => w.id === win.id ? { ...w, ...updates } : w),
     }
     updateRoom(roomId, { geometry: newGeo })
+    const rm = useProjectStore.getState().rooms.find(r => r.id === roomId)
+    const ww = rm?.width_cm ?? 0, hh = rm?.height_cm ?? 0
+    useCanvasStore.getState().pushGeometryCommand(roomId, prevGeo, JSON.parse(JSON.stringify(newGeo)), ww, hh, ww, hh)
   }
 
   const commitHex = () => {

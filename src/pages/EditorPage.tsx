@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Boxes, ArrowLeft, Save, Eye, FileText } from 'lucide-react'
+import { Boxes, ArrowLeft, Save, Eye, FileText, Undo2, Redo2 } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -10,6 +10,7 @@ import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
 import IsometricCanvas from '@/components/editor/IsometricCanvas'
 import RotationControls from '@/components/editor/RotationControls'
+import ZoomControls from '@/components/editor/ZoomControls'
 import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
 import ConstructionDrawingModal from '@/components/editor/ConstructionDrawingModal'
 
@@ -22,6 +23,9 @@ export default function EditorPage() {
   const placementMode = useCanvasStore((s) => s.placementMode)
   const fixturePlacementType = useCanvasStore((s) => s.fixturePlacementType)
   const isDragging = useCanvasStore((s) => s.isDragging)
+  const isPanning = useCanvasStore((s) => s.isPanning)
+  const canUndo = useCanvasStore((s) => s.canUndo)
+  const canRedo = useCanvasStore((s) => s.canRedo)
 
   const [showPreview, setShowPreview] = useState(false)
   const [showDrawings, setShowDrawings] = useState(false)
@@ -93,7 +97,7 @@ export default function EditorPage() {
   }
 
   // Canvas cursor based on mode
-  const canvasCursor = (placementMode || fixturePlacementType) ? 'crosshair' : isDragging ? 'grabbing' : undefined
+  const canvasCursor = isPanning ? 'grabbing' : (placementMode || fixturePlacementType) ? 'crosshair' : isDragging ? 'grabbing' : undefined
 
   return (
     <div className="editor-page">
@@ -118,6 +122,22 @@ export default function EditorPage() {
           {fixturePlacementType && (
             <span className="placement-badge">Click on a wall to place {fixturePlacementType} — Esc to cancel</span>
           )}
+          <button
+            className="editor-undo-btn"
+            onClick={() => useCanvasStore.getState().undo()}
+            disabled={!canUndo}
+            title="Undo (Cmd+Z)"
+          >
+            <Undo2 size={14} />
+          </button>
+          <button
+            className="editor-redo-btn"
+            onClick={() => useCanvasStore.getState().redo()}
+            disabled={!canRedo}
+            title="Redo (Cmd+Shift+Z)"
+          >
+            <Redo2 size={14} />
+          </button>
           <button
             className="editor-drawings-btn"
             onClick={() => setShowDrawings(true)}
@@ -162,6 +182,7 @@ export default function EditorPage() {
             <>
               <IsometricCanvas room={selectedRoom} finishMaterials={finishMaterials} />
               <RotationControls />
+              <ZoomControls />
             </>
           ) : (
             <div className="canvas-empty">
@@ -259,6 +280,33 @@ export default function EditorPage() {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+
+        .editor-undo-btn,
+        .editor-redo-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 32px;
+          height: 32px;
+          border-radius: 6px;
+          border: none;
+          background: none;
+          color: var(--color-text-secondary);
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .editor-undo-btn:hover:not(:disabled),
+        .editor-redo-btn:hover:not(:disabled) {
+          background: var(--color-hover-bg);
+          color: var(--color-text-primary);
+        }
+
+        .editor-undo-btn:disabled,
+        .editor-redo-btn:disabled {
+          opacity: 0.3;
+          cursor: not-allowed;
         }
 
         .editor-drawings-btn {

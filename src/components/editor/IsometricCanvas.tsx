@@ -483,13 +483,23 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
   const visibleWallsRef = useRef<VisibleWallInfo[]>([])
   const rotatedVertsRef = useRef<RoomVertex[]>([])
 
+  // Zoom/Pan refs (not Zustand to avoid excessive redraws)
+  const worldRef = useRef<Container | null>(null)
+  const zoomRef = useRef(1.0)
+  const panRef = useRef({ x: 0, y: 0 })
+  const isPanningRef = useRef(false)
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  const spaceHeldRef = useRef(false)
+
+  // Drag refs
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const dragRef = useRef<{ active: boolean; itemId: string | null }>({
     active: false, itemId: null,
   })
   const fixtureDragRef = useRef<{
     active: boolean; fixtureId: string; type: 'door' | 'window'; originalGeo: RoomGeometry
   } | null>(null)
-  const vertexDragRef = useRef<{ active: boolean; vertexIndex: number } | null>(null)
+  const vertexDragRef = useRef<{ active: boolean; vertexIndex: number; prevGeometry: RoomGeometry; prevWidthCm: number; prevHeightCm: number } | null>(null)
   const wallDragRef = useRef<{
     active: boolean
     insertedIdx1: number       // index of first inserted vertex (A')
@@ -529,7 +539,10 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         // Sims-style: click fixture to pick it up; click again to place
         if (fixtureDragRef.current?.active) {
           const wasSame = fixtureDragRef.current.fixtureId === id
+          const prevGeo = fixtureDragRef.current.originalGeo
+          const nextGeo = JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry
           useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: roomRef.current.geometry })
+          useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, prevGeo, nextGeo, roomRef.current.width_cm, roomRef.current.height_cm, roomRef.current.width_cm, roomRef.current.height_cm)
           fixtureDragRef.current = null
           if (wasSame) return
         }
@@ -558,16 +571,25 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       state.selectedItemId,
       (id) => {
         if (fixtureDragRef.current?.active) {
+          const prevGeo = fixtureDragRef.current.originalGeo
+          const nextGeo = JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry
           useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: roomRef.current.geometry })
+          useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, prevGeo, nextGeo, roomRef.current.width_cm, roomRef.current.height_cm, roomRef.current.width_cm, roomRef.current.height_cm)
           fixtureDragRef.current = null
         }
         state.setSelectedItem(id)
       },
       (id) => {
         if (fixtureDragRef.current?.active) {
+          const prevGeo = fixtureDragRef.current.originalGeo
+          const nextGeo = JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry
           useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: roomRef.current.geometry })
+          useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, prevGeo, nextGeo, roomRef.current.width_cm, roomRef.current.height_cm, roomRef.current.width_cm, roomRef.current.height_cm)
           fixtureDragRef.current = null
         }
+        // Capture start position for undo/redo commitMove
+        const item = state.placedFurniture.find((i) => i.id === id)
+        dragStartRef.current = item ? { x: item.x, y: item.y } : null
         dragRef.current = { active: true, itemId: id }
         state.setDragging(true)
       },
@@ -620,7 +642,8 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
             const normalV = -wdu / wlen
 
             const cs = useCanvasStore.getState()
-            const mouseRoom = screenToRoom(ev.global.x, ev.global.y, frontRef.current)
+            const mw = { x: (ev.global.x - panRef.current.x) / zoomRef.current, y: (ev.global.y - panRef.current.y) / zoomRef.current }
+            const mouseRoom = screenToRoom(mw.x, mw.y, frontRef.current)
             const mouseOrig = unrotatePoint(mouseRoom.u, mouseRoom.v, bboxRef.current.W, bboxRef.current.D, cs.roomRotation)
 
             // Save original geometry for undo
@@ -733,6 +756,9 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           const segIdx = i
           mp.on('pointerdown', (ev: { stopPropagation: () => void }) => {
             ev.stopPropagation()
+            // Snapshot geometry before adding vertex (for undo)
+            const prevGeoSnap = JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry
+            const prevW = roomRef.current.width_cm, prevH = roomRef.current.height_cm
             // Insert a new vertex at the midpoint of this segment
             const newVerts = [...origVerts]
             const oa = origVerts[segIdx], ob = origVerts[(segIdx + 1) % origVerts.length]
@@ -743,9 +769,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
             useProjectStore.getState().updateRoom(roomRef.current.id, {
               geometry: newGeo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
             })
-            // Start dragging the new vertex
+            // Start dragging the new vertex — prevGeometry captures state BEFORE vertex was added
             useCanvasStore.getState().setSelectedVertex(segIdx + 1)
-            vertexDragRef.current = { active: true, vertexIndex: segIdx + 1 }
+            vertexDragRef.current = {
+              active: true, vertexIndex: segIdx + 1,
+              prevGeometry: prevGeoSnap, prevWidthCm: prevW, prevHeightCm: prevH,
+            }
           })
           sl.addChild(mp); sl.addChild(pl)
         }
@@ -764,7 +793,11 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           vh.on('pointerdown', (ev: { stopPropagation: () => void }) => {
             ev.stopPropagation()
             useCanvasStore.getState().setSelectedVertex(vIdx)
-            vertexDragRef.current = { active: true, vertexIndex: vIdx }
+            vertexDragRef.current = {
+              active: true, vertexIndex: vIdx,
+              prevGeometry: JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry,
+              prevWidthCm: roomRef.current.width_cm, prevHeightCm: roomRef.current.height_cm,
+            }
           })
           sl.addChild(vh)
         }
@@ -801,17 +834,139 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       el.appendChild(app.canvas)
       appRef.current = app
 
+      // ── World container (zoom/pan target) ───────────────────────────
+      const world = new Container()
+      app.stage.addChild(world)
+      worldRef.current = world
+
       const rl = new Container(); const fl = new Container(); const sl = new Container()
-      app.stage.addChild(rl); app.stage.addChild(fl); app.stage.addChild(sl)
+      world.addChild(rl); world.addChild(fl); world.addChild(sl)
       roomLayerRef.current = rl; furnitureLayerRef.current = fl; shapeLayerRef.current = sl
 
       app.stage.eventMode = 'static'
       app.stage.hitArea = app.screen
 
+      // ── Zoom/Pan helpers ────────────────────────────────────────────
+      const applyTransform = () => {
+        if (worldRef.current) {
+          worldRef.current.scale.set(zoomRef.current)
+          worldRef.current.position.set(panRef.current.x, panRef.current.y)
+        }
+      }
+
+      const stw = (sx: number, sy: number) => ({
+        x: (sx - panRef.current.x) / zoomRef.current,
+        y: (sy - panRef.current.y) / zoomRef.current,
+      })
+
+      const zoomBy = (factor: number, anchorX?: number, anchorY?: number) => {
+        const sw = appRef.current!.screen.width
+        const sh = appRef.current!.screen.height
+        const oldZoom = zoomRef.current
+        const newZoom = Math.max(0.25, Math.min(3.0, oldZoom * factor))
+        const cx = anchorX ?? sw / 2
+        const cy = anchorY ?? sh / 2
+        panRef.current = {
+          x: cx - (cx - panRef.current.x) * (newZoom / oldZoom),
+          y: cy - (cy - panRef.current.y) * (newZoom / oldZoom),
+        }
+        zoomRef.current = newZoom
+        applyTransform()
+        useCanvasStore.getState().setDisplayZoom(newZoom)
+      }
+
+      const doFitToRoom = () => {
+        const a = appRef.current
+        const w = worldRef.current
+        if (!a || !w) return
+        const sw = a.screen.width, sh = a.screen.height
+        const front = frontRef.current
+        const verts = rotatedVertsRef.current
+        if (verts.length === 0) { zoomRef.current = 1; panRef.current = { x: 0, y: 0 }; applyTransform(); return }
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+        for (const v of verts) {
+          const s = roomToScreen(v.u, v.v, front)
+          minX = Math.min(minX, s.sx); maxX = Math.max(maxX, s.sx)
+          minY = Math.min(minY, s.sy - wallHRef.current); maxY = Math.max(maxY, s.sy)
+        }
+        const padding = 60
+        const worldW = maxX - minX + padding * 2
+        const worldH = maxY - minY + padding * 2
+        const zoom = Math.max(0.25, Math.min(Math.min(sw / worldW, sh / worldH), 3.0))
+        const centerX = (minX + maxX) / 2
+        const centerY = (minY + maxY) / 2
+        zoomRef.current = zoom
+        panRef.current = { x: sw / 2 - centerX * zoom, y: sh / 2 - centerY * zoom }
+        applyTransform()
+        useCanvasStore.getState().setDisplayZoom(zoom)
+      }
+
+      useCanvasStore.getState().setZoomFunctions({
+        zoomIn: () => zoomBy(1.25),
+        zoomOut: () => zoomBy(0.8),
+        fitToRoom: doFitToRoom,
+      })
+
+      // ── Wheel zoom ──────────────────────────────────────────────────
+      const onWheel = (ev: WheelEvent) => {
+        if (!ev.ctrlKey && !ev.metaKey) return
+        ev.preventDefault()
+        const rect = containerRef.current!.getBoundingClientRect()
+        const cursorX = ev.clientX - rect.left
+        const cursorY = ev.clientY - rect.top
+        const factor = ev.deltaY > 0 ? 0.9 : 1.1
+        zoomBy(factor, cursorX, cursorY)
+      }
+      el.addEventListener('wheel', onWheel, { passive: false })
+
+      // ── Pinch-to-zoom ───────────────────────────────────────────────
+      let pinchDist = 0, pinchZoom = 1
+      const onTouchStart = (ev: TouchEvent) => {
+        if (ev.touches.length === 2) {
+          ev.preventDefault()
+          const dx = ev.touches[1].clientX - ev.touches[0].clientX
+          const dy = ev.touches[1].clientY - ev.touches[0].clientY
+          pinchDist = Math.sqrt(dx * dx + dy * dy)
+          pinchZoom = zoomRef.current
+        }
+      }
+      const onTouchMove = (ev: TouchEvent) => {
+        if (ev.touches.length === 2 && pinchDist > 0) {
+          ev.preventDefault()
+          const dx = ev.touches[1].clientX - ev.touches[0].clientX
+          const dy = ev.touches[1].clientY - ev.touches[0].clientY
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          const rect = containerRef.current!.getBoundingClientRect()
+          const cx = (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - rect.left
+          const cy = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - rect.top
+          const oldZoom = zoomRef.current
+          const newZoom = Math.max(0.25, Math.min(3.0, pinchZoom * (dist / pinchDist)))
+          panRef.current = {
+            x: cx - (cx - panRef.current.x) * (newZoom / oldZoom),
+            y: cy - (cy - panRef.current.y) * (newZoom / oldZoom),
+          }
+          zoomRef.current = newZoom
+          applyTransform()
+          useCanvasStore.getState().setDisplayZoom(newZoom)
+        }
+      }
+      const onTouchEnd = () => { pinchDist = 0 }
+      el.addEventListener('touchstart', onTouchStart, { passive: false })
+      el.addEventListener('touchmove', onTouchMove, { passive: false })
+      el.addEventListener('touchend', onTouchEnd)
+
       // ── Stage click: place furniture, place fixture, or deselect ────
       app.stage.on('pointerdown', (e) => {
         const s = useCanvasStore.getState()
         const p = e.global
+
+        // Pan: middle mouse or space+left click
+        if (e.button === 1 || (spaceHeldRef.current && e.button === 0)) {
+          isPanningRef.current = true
+          panStartRef.current = { x: p.x, y: p.y, panX: panRef.current.x, panY: panRef.current.y }
+          s.setIsPanning(true)
+          return
+        }
 
         // Finalize fixture drag (Sims-style: click anywhere to place)
         if (fixtureDragRef.current?.active) {
@@ -820,9 +975,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           return
         }
 
+        // Convert screen to world coords for all interactions
+        const w = stw(p.x, p.y)
+
         // Furniture placement mode
         if (s.placementMode) {
-          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const rotated = screenToRoom(w.x, w.y, frontRef.current)
           const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
           const verts = getVertices(roomRef.current)
           if (pointInPolygon(orig.u, orig.v, verts)) {
@@ -833,10 +991,9 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
 
         // Fixture placement mode (door/window)
         if (s.fixturePlacementType && visibleWallsRef.current.length > 0) {
-          const px = p.x, py = p.y
           for (const vw of visibleWallsRef.current) {
-            if (pointInConvexQuad(px, py, vw.quad)) {
-              const screenPos = projectOnSegment(px, py, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
+            if (pointInConvexQuad(w.x, w.y, vw.quad)) {
+              const screenPos = projectOnSegment(w.x, w.y, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
               const defaultWidth = s.fixturePlacementType === 'door' ? 0.8 : 1.0
               const halfT = (defaultWidth / 2) / vw.lengthM
               const clampedPos = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, screenPos))
@@ -848,10 +1005,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
                 width_m: defaultWidth,
               }
               const geo = roomRef.current.geometry as RoomGeometry
+              const prevGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
               const newGeo = s.fixturePlacementType === 'door'
                 ? { ...geo, doors: [...(geo.doors ?? []), newFixture] }
                 : { ...geo, windows: [...(geo.windows ?? []), newFixture] }
               useProjectStore.getState().updateRoom(roomRef.current.id, { geometry: newGeo })
+              useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, prevGeo, newGeo, roomRef.current.width_cm, roomRef.current.height_cm, roomRef.current.width_cm, roomRef.current.height_cm)
               s.setFixturePlacementMode(null)
               break
             }
@@ -870,9 +1029,22 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         const s = useCanvasStore.getState()
         const p = e.global
 
+        // Pan handling
+        if (isPanningRef.current) {
+          panRef.current = {
+            x: panStartRef.current.panX + (p.x - panStartRef.current.x),
+            y: panStartRef.current.panY + (p.y - panStartRef.current.y),
+          }
+          applyTransform()
+          return
+        }
+
+        // Convert screen to world coords
+        const w = stw(p.x, p.y)
+
         // Vertex drag (shape edit mode)
         if (vertexDragRef.current?.active && s.shapeEditMode) {
-          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const rotated = screenToRoom(w.x, w.y, frontRef.current)
           const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
           // Snap to 10cm grid
           const snappedU = Math.round(orig.u * 10) / 10
@@ -889,7 +1061,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
 
         // Wall drag (shape edit mode — push/pull rectangular extrusion)
         if (wallDragRef.current?.active && s.shapeEditMode) {
-          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const rotated = screenToRoom(w.x, w.y, frontRef.current)
           const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
           const wd = wallDragRef.current
           const deltaU = orig.u - wd.startMouseU
@@ -921,12 +1093,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
         const fDrag = fixtureDragRef.current
         if (fDrag?.active && visibleWallsRef.current.length > 0) {
           for (const vw of visibleWallsRef.current) {
-            if (pointInConvexQuad(p.x, p.y, vw.quad)) {
-              const screenPos = projectOnSegment(p.x, p.y, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
+            if (pointInConvexQuad(w.x, w.y, vw.quad)) {
+              const screenPos = projectOnSegment(w.x, w.y, vw.screenA.x, vw.screenA.y, vw.screenB.x, vw.screenB.y)
               const geo = roomRef.current.geometry as RoomGeometry
               const fixture = fDrag.type === 'door'
                 ? (geo.doors ?? []).find(d => d.id === fDrag.fixtureId)
-                : (geo.windows ?? []).find(w => w.id === fDrag.fixtureId)
+                : (geo.windows ?? []).find(wn => wn.id === fDrag.fixtureId)
               if (fixture) {
                 const halfT = (fixture.width_m / 2) / vw.lengthM
                 const clamped = Math.max(halfT + 0.02, Math.min(1 - halfT - 0.02, screenPos))
@@ -937,7 +1109,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
                 if (fDrag.type === 'door') {
                   newGeo.doors = (geo.doors ?? []).map(d => d.id === fDrag.fixtureId ? updated : d)
                 } else {
-                  newGeo.windows = (geo.windows ?? []).map(w => w.id === fDrag.fixtureId ? updated : w)
+                  newGeo.windows = (geo.windows ?? []).map(wn => wn.id === fDrag.fixtureId ? updated : wn)
                 }
                 roomRef.current = { ...roomRef.current, geometry: newGeo }
                 redraw()
@@ -949,7 +1121,7 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
 
         // Furniture drag: point-in-polygon clamping
         if (dragRef.current.active && dragRef.current.itemId) {
-          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const rotated = screenToRoom(w.x, w.y, frontRef.current)
           const orig = unrotatePoint(rotated.u, rotated.v, bboxRef.current.W, bboxRef.current.D, s.roomRotation)
           const verts = getVertices(roomRef.current)
           let u = orig.u, v = orig.v
@@ -960,22 +1132,32 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           s.moveItem(dragRef.current.itemId, u, v)
         }
 
-        // Ghost sprite follows cursor
+        // Ghost sprite follows cursor (world coords since ghost is in worldContainer)
         if (s.placementMode && ghostRef.current) {
-          const rotated = screenToRoom(p.x, p.y, frontRef.current)
+          const rotated = screenToRoom(w.x, w.y, frontRef.current)
           const pos = roomToScreen(rotated.u, rotated.v, frontRef.current)
           ghostRef.current.position.set(pos.sx, pos.sy)
         }
       })
 
       app.stage.on('pointerup', () => {
+        // End pan
+        if (isPanningRef.current) {
+          isPanningRef.current = false
+          useCanvasStore.getState().setIsPanning(false)
+          return
+        }
+
         if (vertexDragRef.current?.active) {
           // Commit vertex position to DB
+          const vd = vertexDragRef.current
           const geo = roomRef.current.geometry as RoomGeometry
           const bbox = computeBoundingBox(geo.vertices ?? [])
+          const nextGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
           useProjectStore.getState().updateRoom(roomRef.current.id, {
             geometry: geo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
           })
+          useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, vd.prevGeometry, nextGeo, vd.prevWidthCm, vd.prevHeightCm, bbox.width_cm, bbox.height_cm)
           vertexDragRef.current = null
           return
         }
@@ -995,9 +1177,11 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           if (moved) {
             // Commit the extrusion
             const bbox = computeBoundingBox(verts)
+            const nextGeo = JSON.parse(JSON.stringify(geo)) as RoomGeometry
             useProjectStore.getState().updateRoom(roomRef.current.id, {
               geometry: geo, width_cm: bbox.width_cm, height_cm: bbox.height_cm,
             })
+            useCanvasStore.getState().pushGeometryCommand(roomRef.current.id, wd.originalGeo, nextGeo, wd.originalWidthCm, wd.originalHeightCm, bbox.width_cm, bbox.height_cm)
           } else {
             // No movement — revert to original geometry (remove inserted vertices)
             roomRef.current = {
@@ -1012,12 +1196,35 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           return
         }
         if (dragRef.current.active) {
+          // Commit move for undo/redo
+          const startPos = dragStartRef.current
+          if (startPos && dragRef.current.itemId) {
+            useCanvasStore.getState().commitMove(dragRef.current.itemId, startPos.x, startPos.y)
+          }
           dragRef.current = { active: false, itemId: null }
+          dragStartRef.current = null
           useCanvasStore.getState().setDragging(false)
         }
       })
 
       const onKey = (e: KeyboardEvent) => {
+        const isInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+        // Undo/Redo
+        if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey && !isInput) {
+          e.preventDefault()
+          useCanvasStore.getState().undo()
+          return
+        }
+        if ((e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey && !isInput) {
+          e.preventDefault()
+          useCanvasStore.getState().redo()
+          return
+        }
+        // Space for pan cursor
+        if (e.key === ' ' && !isInput) {
+          e.preventDefault()
+          spaceHeldRef.current = true
+        }
         if (e.key === 'Escape') {
           if (fixtureDragRef.current?.active) {
             roomRef.current = { ...roomRef.current, geometry: fixtureDragRef.current.originalGeo }
@@ -1028,19 +1235,23 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
             useCanvasStore.getState().cancelPlacement()
           }
         }
-        if ((e.key === 'Delete' || e.key === 'Backspace') && !(e.target instanceof HTMLInputElement)) {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
           const s = useCanvasStore.getState()
           if (s.shapeEditMode && s.selectedVertexIndex != null) {
             const verts = getVertices(roomRef.current)
             if (verts.length > 4) {
+              const prevGeo = JSON.parse(JSON.stringify(roomRef.current.geometry)) as RoomGeometry
+              const prevW = roomRef.current.width_cm, prevH = roomRef.current.height_cm
               const newVerts = verts.filter((_, i) => i !== s.selectedVertexIndex)
               const bbox = computeBoundingBox(newVerts)
               const geo = roomRef.current.geometry as RoomGeometry
+              const nextGeo = { ...geo, vertices: newVerts }
               useProjectStore.getState().updateRoom(roomRef.current.id, {
-                geometry: { ...geo, vertices: newVerts },
+                geometry: nextGeo,
                 width_cm: bbox.width_cm,
                 height_cm: bbox.height_cm,
               })
+              s.pushGeometryCommand(roomRef.current.id, prevGeo, JSON.parse(JSON.stringify(nextGeo)), prevW, prevH, bbox.width_cm, bbox.height_cm)
               s.setSelectedVertex(null)
             }
           } else if (s.selectedItemId) {
@@ -1048,21 +1259,33 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           }
         }
       }
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (e.key === ' ') spaceHeldRef.current = false
+      }
       window.addEventListener('keydown', onKey)
+      window.addEventListener('keyup', onKeyUp)
 
       const ro = new ResizeObserver(() => {
         if (appRef.current && containerRef.current) {
           appRef.current.renderer.resize(containerRef.current.clientWidth, containerRef.current.clientHeight)
           appRef.current.stage.hitArea = appRef.current.screen
           redraw()
+          applyTransform()
         }
       })
       ro.observe(el)
 
       redraw()
+      // Initial fit-to-room after first draw
+      requestAnimationFrame(doFitToRoom)
 
       ;(el as unknown as Record<string, unknown>)._cleanup = () => {
         window.removeEventListener('keydown', onKey)
+        window.removeEventListener('keyup', onKeyUp)
+        el.removeEventListener('wheel', onWheel)
+        el.removeEventListener('touchstart', onTouchStart)
+        el.removeEventListener('touchmove', onTouchMove)
+        el.removeEventListener('touchend', onTouchEnd)
         ro.disconnect()
       }
     }
@@ -1073,19 +1296,20 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
       ;(el as unknown as Record<string, () => void>)._cleanup?.()
       appRef.current?.destroy(true)
       appRef.current = null
+      worldRef.current = null
     }
   }, [redraw])
 
   // Redraw on room / material changes
   useEffect(() => { redraw() }, [room, finishMaterials, redraw])
 
-  // Ghost sprite lifecycle
+  // Ghost sprite lifecycle — added to worldContainer so it scales with zoom
   useEffect(() => {
     const unsub = useCanvasStore.subscribe((state, prev) => {
       if (state.placementMode === prev.placementMode &&
           state.placementVariantId === prev.placementVariantId) return
-      const app = appRef.current
-      if (!app) return
+      const w = worldRef.current
+      if (!w) return
 
       // Remove old ghost
       if (ghostRef.current) { ghostRef.current.destroy(); ghostRef.current = null }
@@ -1096,12 +1320,12 @@ export default function IsometricCanvas({ room, finishMaterials }: Props) {
           ?? getFallbackUrl(state.placementVariantId, state.placementItemId)
         if (url) {
           loadTex(url).then((tex) => {
-            if (tex === Texture.EMPTY || !appRef.current) return
+            if (tex === Texture.EMPTY || !worldRef.current) return
             const g = new Sprite(tex)
             g.anchor.set(0.5, 0.85)
             g.alpha = 0.5
             g.scale.set(getItemScale(state.placementItemId!, state.placementVariantId!))
-            appRef.current!.stage.addChild(g)
+            worldRef.current!.addChild(g)
             ghostRef.current = g
           })
         }
