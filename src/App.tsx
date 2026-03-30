@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
 import EditorPage from '@/pages/EditorPage'
+import AdminPage from '@/pages/AdminPage'
 import { Boxes, X } from 'lucide-react'
 
 // Auth-protected route wrapper
@@ -56,6 +57,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />
   }
 
+  return <>{children}</>
+}
+
+// Admin-only route wrapper
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { profile } = useAuthStore()
+  if (profile?.role !== 'admin') {
+    return <Navigate to="/" replace />
+  }
   return <>{children}</>
 }
 
@@ -146,6 +156,16 @@ export default function App() {
           element={
             <ProtectedRoute>
               <EditorPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <AdminRoute>
+                <AdminPage />
+              </AdminRoute>
             </ProtectedRoute>
           }
         />

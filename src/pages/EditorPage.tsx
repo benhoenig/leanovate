@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Boxes, ArrowLeft, Save } from 'lucide-react'
+import { Boxes, ArrowLeft, Save, Eye } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -10,6 +10,7 @@ import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
 import IsometricCanvas from '@/components/editor/IsometricCanvas'
 import RotationControls from '@/components/editor/RotationControls'
+import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
 
 export default function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -20,6 +21,8 @@ export default function EditorPage() {
   const placementMode = useCanvasStore((s) => s.placementMode)
   const fixturePlacementType = useCanvasStore((s) => s.fixturePlacementType)
   const isDragging = useCanvasStore((s) => s.isDragging)
+
+  const [showPreview, setShowPreview] = useState(false)
 
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
 
@@ -114,6 +117,15 @@ export default function EditorPage() {
             <span className="placement-badge">Click on a wall to place {fixturePlacementType} — Esc to cancel</span>
           )}
           <button
+            className="editor-preview-btn"
+            onClick={() => setShowPreview(true)}
+            disabled={!selectedRoom}
+            title="Preview Room"
+          >
+            <Eye size={14} />
+            Preview
+          </button>
+          <button
             className="editor-save-btn"
             onClick={handleSave}
             disabled={isLoading || !isDirty}
@@ -123,6 +135,9 @@ export default function EditorPage() {
           </button>
         </div>
       </header>
+
+      {/* Room Preview Modal */}
+      {showPreview && <RoomPreviewModal onClose={() => setShowPreview(false)} />}
 
       {/* Editor Body */}
       <div className="editor-body">
@@ -232,6 +247,32 @@ export default function EditorPage() {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+
+        .editor-preview-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 6px 14px;
+          border-radius: 7px;
+          border: 1.5px solid var(--color-border-custom);
+          background: none;
+          color: var(--color-text-secondary);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+
+        .editor-preview-btn:hover:not(:disabled) {
+          border-color: var(--color-primary-brand);
+          color: var(--color-primary-brand);
+        }
+
+        .editor-preview-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
         }
 
         .editor-save-btn {

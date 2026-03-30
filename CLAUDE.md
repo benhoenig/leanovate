@@ -19,13 +19,14 @@ Internal isometric room planner for an interior design team serving condo invest
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-Phase 6: Room Preview + Admin + Daily Recheck
+Phase 6: Room Preview + Admin + Daily Recheck (Core 3 COMPLETE — remaining: Daily Recheck + Construction Drawing Export)
 <!-- Phase 1: Foundation — COMPLETE (schema + storage buckets in supabase/migrations/20240101000000_full_schema.sql) -->
 <!-- Phase 2: Room Builder — COMPLETE -->
 <!-- Phase 4: Isometric Canvas — COMPLETE (furniture placement, drag, rotate, variant switch, room rotation, right panel properties) -->
 <!-- Phase 3: Furniture Catalog + AI Pipeline — COMPLETE (seed migration, useCatalogStore, CatalogPanel, AddFurnitureModal, ImageApprovalModal, 4 edge functions) -->
 <!-- Phase 5: Templates + Cost Summary — COMPLETE (3-layer templates, cost panel, staleness alerts) -->
-<!-- Update this line as you progress through phases. See docs/implementation-plan.md for phase details. -->
+<!-- Phase 6 (partial): Admin + Team Management + Room Preview — COMPLETE -->
+<!-- Remaining Phase 6: Daily Link Recheck + Construction Drawing Export -->
 
 ## Phase 2 Completion Notes
 All Phase 2 verification steps pass. Key implementation details for future reference:
@@ -171,6 +172,45 @@ Full template system (3 layers) + cost summary panel with staleness alerts.
 
 ### Project Store Update
 - `updateProject` type expanded to include `unit_width_cm | unit_height_cm` (needed by unit template apply)
+
+## Phase 6 Completion Notes (Core 3)
+Admin catalog management, team management, and room perspective preview implemented. Daily link recheck and construction drawing export deferred.
+
+### Admin Page (`src/pages/AdminPage.tsx`)
+- 4-tab navigation: Pending | Catalog | Link Health | Team
+- Route-protected: `AdminRoute` wrapper in App.tsx checks `profile?.role !== 'admin'`, redirects to `/`
+- Header: back button → dashboard, LEANOVATE logo, ADMIN badge, user name
+- Tab state is component-local (no UIStore changes)
+
+### Admin Components (`src/components/admin/`)
+- **PendingApprovalQueue.tsx** — Direct Supabase queries (not catalog store) to avoid clobbering main `items` list. Expandable cards with item name, category pill, submitter, variants with thumbnails/prices/statuses. Approve/Reject buttons call `catalogStore.approveItem()`/`rejectItem()`.
+- **CatalogOverview.tsx** — Summary count cards (total/draft/pending/approved/rejected). Search + status filter pills. Scrollable item list with status dots.
+- **LinkHealthOverview.tsx** — Summary cards (active/inactive/unchecked/price changed counts). Flagged variants list with badges.
+- **TeamManagement.tsx** — Team member list with role badges, invite form (email + display name + role picker), role toggle (Promote/Demote), remove with confirmation. Uses local `invokeEdgeFunction` helper (same raw fetch + localStorage token pattern as useCatalogStore).
+
+### Team Management Edge Function (`supabase/functions/manage-team/index.ts`)
+- 3 actions: `invite` (createUser + set profile), `change-role` (update profile), `remove` (deleteUser)
+- Uses `service_role_key` for `supabase.auth.admin` operations
+- Security: verifies caller is admin via auth token + profiles table check
+- Self-protection: cannot change own role or remove self
+
+### Room Perspective Preview
+- **`src/lib/renderRoomPreview.ts`** — Client-side Three.js renderer (same offscreen canvas pattern as renderSprites.ts)
+  - Builds room shell: floor (ShapeGeometry from vertices), walls (PlaneGeometry per segment), ceiling
+  - Applies finish colors from finish_materials table via `getFinishColor()` pattern
+  - Loads placed furniture .glb models via GLTFLoader, positions at (u, 0, v), scales by dimensions
+  - PerspectiveCamera at 160cm height, positioned near first door (fallback: wall midpoint)
+  - Lighting: ambient + warm directional + cool fill + point light at centroid
+  - Output: 1920×1080 PNG blob
+  - Returns `{ blob, error, warnings }` — warnings list items with missing .glb files
+- **`src/components/editor/RoomPreviewModal.tsx`** — Modal overlay with loading spinner, rendered image, warning banner, Download PNG + Save to Project buttons
+  - "Save to Project" uploads to `thumbnails` bucket, updates `rooms.preview_image_url`
+- **EditorPage changes** — "Preview" button in header (Eye icon), disabled when no room selected
+
+### Route & Navigation Changes
+- `src/App.tsx` — Added `AdminRoute` wrapper + `/admin` route
+- `src/pages/DashboardPage.tsx` — Added "Admin" button (Shield icon) visible to admin role only
+- `src/stores/useProjectStore.ts` — Added `preview_image_url` to `updateRoom` accepted fields
 
 ## Code Style
 - TypeScript strict mode

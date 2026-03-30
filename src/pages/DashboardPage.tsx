@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Boxes, Plus, LogOut, FolderOpen, ExternalLink } from 'lucide-react'
+import { Boxes, Plus, LogOut, FolderOpen, ExternalLink, Shield } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -74,6 +74,12 @@ export default function DashboardPage() {
           <span className="header-logo-text">LEANOVATE</span>
         </div>
         <div className="header-right">
+          {profile?.role === 'admin' && (
+            <button className="header-admin-btn" onClick={() => navigate('/admin')} title="Admin Dashboard">
+              <Shield size={14} />
+              Admin
+            </button>
+          )}
           <span className="header-user-name">{profile?.display_name}</span>
           <span className="header-user-role">{profile?.role}</span>
           <button className="header-sign-out" onClick={handleSignOut} title="Sign out">
@@ -186,6 +192,27 @@ export default function DashboardPage() {
           color: white;
           padding: 2px 6px;
           border-radius: 4px;
+        }
+
+        .header-admin-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 5px 12px;
+          border-radius: 6px;
+          border: 1.5px solid #F2735A;
+          background: none;
+          color: #F2735A;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+
+        .header-admin-btn:hover {
+          background: #F2735A;
+          color: white;
         }
 
         .header-sign-out {

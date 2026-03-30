@@ -20,7 +20,7 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   loadProject: (id: string) => Promise<void>
   addRoom: (projectId: string, name: string) => Promise<{ id: string | null; error: string | null }>
-  updateRoom: (id: string, updates: Partial<Pick<Room, 'name' | 'width_cm' | 'height_cm' | 'ceiling_height_cm' | 'geometry' | 'finishes' | 'sort_order'>>) => Promise<void>
+  updateRoom: (id: string, updates: Partial<Pick<Room, 'name' | 'width_cm' | 'height_cm' | 'ceiling_height_cm' | 'geometry' | 'finishes' | 'sort_order' | 'preview_image_url'>>) => Promise<void>
   deleteRoom: (id: string) => Promise<void>
   saveProject: () => Promise<void>
   setSelectedRoom: (id: string | null) => void
