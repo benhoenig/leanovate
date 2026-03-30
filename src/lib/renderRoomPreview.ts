@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { supabase } from './supabase'
 import { getVertices, polygonCentroid } from './roomGeometry'
-import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, Direction } from '@/types'
+import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, Direction, RoomDoor, RoomWindow } from '@/types'
 
 const PREVIEW_WIDTH = 1920
 const PREVIEW_HEIGHT = 1080
@@ -25,6 +25,8 @@ interface RenderParams {
   variants: Record<string, FurnitureVariant[]>
   /** Keyed by furniture_item_id */
   items: Record<string, FurnitureItem>
+  /** Which wall to position the camera at (index into vertices). Defaults to 0. */
+  cameraWallIdx?: number
 }
 
 interface RenderResult {
@@ -112,13 +114,41 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
     ceilingMesh.position.y = ceilingH
     scene.add(ceilingMesh)
 
-    // ── Walls ────────────────────────────────────────────────────────────────
+    // ── Walls (with door/window cutouts) ──────────────────────────────────────
     const wallMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(wallColor),
       roughness: 0.6,
       metalness: 0,
       side: THREE.DoubleSide,
     })
+
+    // Get finish colors for doors and windows
+    const doorColor = getFinishHex(room.finishes?.door?.material_id, 'door', finishMaterials)
+    const windowColor = getFinishHex(room.finishes?.window?.material_id, 'window', finishMaterials)
+
+    const doorMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(doorColor),
+      roughness: 0.4,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+    })
+    const windowGlassMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(windowColor),
+      roughness: 0.1,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    })
+    const windowFrameMat = new THREE.MeshStandardMaterial({
+      color: 0xDDDDDD,
+      roughness: 0.4,
+      metalness: 0.3,
+      side: THREE.DoubleSide,
+    })
+
+    const allDoors: RoomDoor[] = room.geometry?.doors ?? []
+    const allWindows: RoomWindow[] = room.geometry?.windows ?? []
 
     for (let i = 0; i < vertices.length; i++) {
       const a = vertices[i]
@@ -127,20 +157,129 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       const wallLen = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
       if (wallLen < 0.01) continue
 
-      const wallGeo = new THREE.PlaneGeometry(wallLen, ceilingH)
-      const wall = new THREE.Mesh(wallGeo, wallMat)
-
-      // Position at midpoint, half ceiling height
-      const midU = (a.u + b.u) / 2
-      const midV = (a.v + b.v) / 2
-      wall.position.set(midU, ceilingH / 2, midV)
-
-      // Rotate to align plane width with wall direction
       const angle = Math.atan2(b.v - a.v, b.u - a.u)
-      wall.rotation.y = -angle
 
-      wall.receiveShadow = true
-      scene.add(wall)
+      // Collect doors and windows on this wall
+      const wallDoors = allDoors.filter((d) => d.wall_index === i)
+      const wallWindows = allWindows.filter((w) => w.wall_index === i)
+
+      if (wallDoors.length === 0 && wallWindows.length === 0) {
+        // Simple solid wall — no cutouts needed
+        const wallGeo = new THREE.PlaneGeometry(wallLen, ceilingH)
+        const wall = new THREE.Mesh(wallGeo, wallMat)
+        wall.position.set((a.u + b.u) / 2, ceilingH / 2, (a.v + b.v) / 2)
+        wall.rotation.y = -angle
+        wall.receiveShadow = true
+        scene.add(wall)
+      } else {
+        // Wall with cutouts — use Shape with holes
+        // Shape is in wall-local 2D: x = along wall (0 to wallLen), y = height (0 to ceilingH)
+        const wallShape = new THREE.Shape()
+        wallShape.moveTo(0, 0)
+        wallShape.lineTo(wallLen, 0)
+        wallShape.lineTo(wallLen, ceilingH)
+        wallShape.lineTo(0, ceilingH)
+        wallShape.closePath()
+
+        // Cut door holes
+        for (const door of wallDoors) {
+          const doorCenterX = door.position * wallLen
+          const doorW = door.width_m ?? 0.8
+          const doorH = door.height_m ?? ceilingH * 0.82
+          const x0 = Math.max(0, doorCenterX - doorW / 2)
+          const x1 = Math.min(wallLen, doorCenterX + doorW / 2)
+
+          const hole = new THREE.Path()
+          hole.moveTo(x0, 0)
+          hole.lineTo(x1, 0)
+          hole.lineTo(x1, doorH)
+          hole.lineTo(x0, doorH)
+          hole.closePath()
+          wallShape.holes.push(hole)
+
+          // Add a door panel (slightly recessed) — thin box behind the opening
+          const doorPanelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
+          const doorPanel = new THREE.Mesh(doorPanelGeo, doorMat)
+          // Position along wall in local coords, then transform to world
+          const doorLocalX = (x0 + x1) / 2 - wallLen / 2
+          const doorLocalY = doorH / 2
+          // Transform to world: rotate by wall angle, translate to wall midpoint
+          const cosA = Math.cos(-angle)
+          const sinA = Math.sin(-angle)
+          const midU = (a.u + b.u) / 2
+          const midV = (a.v + b.v) / 2
+          doorPanel.position.set(
+            midU + doorLocalX * cosA,
+            doorLocalY,
+            midV - doorLocalX * sinA
+          )
+          doorPanel.rotation.y = -angle
+          scene.add(doorPanel)
+        }
+
+        // Cut window holes
+        for (const win of wallWindows) {
+          const winCenterX = win.position * wallLen
+          const winW = win.width_m ?? 1.0
+          const winSill = win.sill_m ?? ceilingH * 0.30
+          const winH = win.height_m ?? ceilingH * 0.48
+          const x0 = Math.max(0, winCenterX - winW / 2)
+          const x1 = Math.min(wallLen, winCenterX + winW / 2)
+
+          const hole = new THREE.Path()
+          hole.moveTo(x0, winSill)
+          hole.lineTo(x1, winSill)
+          hole.lineTo(x1, winSill + winH)
+          hole.lineTo(x0, winSill + winH)
+          hole.closePath()
+          wallShape.holes.push(hole)
+
+          // Add glass pane in the window opening
+          const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
+          const glass = new THREE.Mesh(glassGeo, windowGlassMat)
+          const glassLocalX = (x0 + x1) / 2 - wallLen / 2
+          const glassLocalY = winSill + winH / 2
+          const cosA = Math.cos(-angle)
+          const sinA = Math.sin(-angle)
+          const midU = (a.u + b.u) / 2
+          const midV = (a.v + b.v) / 2
+          glass.position.set(
+            midU + glassLocalX * cosA,
+            glassLocalY,
+            midV - glassLocalX * sinA
+          )
+          glass.rotation.y = -angle
+          scene.add(glass)
+
+          // Window frame (thin border around the opening)
+          const frameThickness = 0.04
+          const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
+          const frame = new THREE.Mesh(frameGeo, windowFrameMat)
+          frame.position.copy(glass.position)
+          frame.position.y = glassLocalY
+          frame.rotation.y = -angle
+          // Slight offset so frame is behind glass
+          const { nu, nv } = (() => {
+            const len = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
+            return { nu: -(b.v - a.v) / len, nv: (b.u - a.u) / len }
+          })()
+          frame.position.x -= nu * 0.005
+          frame.position.z -= nv * 0.005
+          scene.add(frame)
+        }
+
+        // Create the wall mesh with holes
+        const wallGeo = new THREE.ShapeGeometry(wallShape)
+        const wall = new THREE.Mesh(wallGeo, wallMat)
+        // ShapeGeometry is in XY plane. We need to:
+        // 1. Offset so center of wall is at origin (shape goes 0..wallLen, 0..ceilingH)
+        // 2. Rotate to align with wall direction
+        // 3. Translate to wall world position
+        wall.position.set(a.u, 0, a.v)
+        wall.rotation.y = -angle
+        wall.receiveShadow = true
+        scene.add(wall)
+      }
     }
 
     // ── Lighting ─────────────────────────────────────────────────────────────
@@ -251,24 +390,8 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
       return { nu: -dv / len, nv: du / len }
     }
 
-    // Find the best "camera wall" — prefer the wall with a door (photographer
-    // stands in the doorway), otherwise pick the shortest wall so we look
-    // across the longest dimension of the room for maximum depth.
-    const doors = room.geometry?.doors ?? []
-    let cameraWallIdx = 0
-
-    if (doors.length > 0) {
-      cameraWallIdx = doors[0].wall_index ?? 0
-    } else {
-      // Pick shortest wall — looking across gives the best depth perspective
-      let minLen = Infinity
-      for (let i = 0; i < vertices.length; i++) {
-        const a = vertices[i]
-        const b = vertices[(i + 1) % vertices.length]
-        const len = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
-        if (len < minLen) { minLen = len; cameraWallIdx = i }
-      }
-    }
+    // Camera wall: caller specifies which wall to stand at (default wall 0)
+    const cameraWallIdx = (params.cameraWallIdx ?? 0) % vertices.length
 
     // Camera position: midpoint of camera wall, offset inward
     const camA = vertices[cameraWallIdx % vertices.length]

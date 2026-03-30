@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { X, Download, Save, Loader2, AlertTriangle } from 'lucide-react'
 import { renderRoomPreview } from '@/lib/renderRoomPreview'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -6,6 +6,7 @@ import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { supabase } from '@/lib/supabase'
+import { getVertices } from '@/lib/roomGeometry'
 import type { FurnitureItem } from '@/types'
 
 export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
@@ -14,72 +15,93 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
+  const [selectedWallIdx, setSelectedWallIdx] = useState(0)
   const blobRef = useRef<Blob | null>(null)
+  const imageUrlRef = useRef<string | null>(null)
 
   const { rooms, selectedRoomId, finishMaterials, updateRoom } = useProjectStore()
   const { showToast } = useUIStore()
   const room = rooms.find((r) => r.id === selectedRoomId) ?? null
+  const numWalls = room ? getVertices(room).length : 4
 
-  useEffect(() => {
+  const renderPreview = useCallback(async (wallIdx: number) => {
     if (!room) {
       setError('No room selected')
       setStatus('error')
       return
     }
 
-    const run = async () => {
-      const placedFurniture = useCanvasStore.getState().placedFurniture
-      const catalog = useCatalogStore.getState()
+    setStatus('rendering')
+    setError(null)
 
-      // Build lookup maps for the renderer
-      const variantsMap: Record<string, typeof catalog.variants[string]> = {}
-      const itemsMap: Record<string, FurnitureItem> = {}
-
-      for (const pf of placedFurniture) {
-        // Ensure variants are loaded
-        if (!catalog.variants[pf.furniture_item_id]) {
-          await catalog.loadVariantsForItem(pf.furniture_item_id)
-        }
-        variantsMap[pf.furniture_item_id] = useCatalogStore.getState().variants[pf.furniture_item_id] ?? []
-
-        const item = useCatalogStore.getState().items.find((i) => i.id === pf.furniture_item_id)
-        if (item) itemsMap[pf.furniture_item_id] = item
-      }
-
-      const result = await renderRoomPreview({
-        room,
-        finishMaterials,
-        placedFurniture,
-        variants: variantsMap,
-        items: itemsMap,
-      })
-
-      if (result.error || !result.blob) {
-        setError(result.error ?? 'Render failed')
-        setStatus('error')
-        return
-      }
-
-      blobRef.current = result.blob
-      setWarnings(result.warnings)
-      const url = URL.createObjectURL(result.blob)
-      setImageUrl(url)
-      setStatus('complete')
+    // Revoke old URL
+    if (imageUrlRef.current) {
+      URL.revokeObjectURL(imageUrlRef.current)
+      imageUrlRef.current = null
+      setImageUrl(null)
     }
 
-    run()
+    const placedFurniture = useCanvasStore.getState().placedFurniture
+    const catalog = useCatalogStore.getState()
 
+    // Build lookup maps for the renderer
+    const variantsMap: Record<string, typeof catalog.variants[string]> = {}
+    const itemsMap: Record<string, FurnitureItem> = {}
+
+    for (const pf of placedFurniture) {
+      if (!catalog.variants[pf.furniture_item_id]) {
+        await catalog.loadVariantsForItem(pf.furniture_item_id)
+      }
+      variantsMap[pf.furniture_item_id] = useCatalogStore.getState().variants[pf.furniture_item_id] ?? []
+
+      const item = useCatalogStore.getState().items.find((i) => i.id === pf.furniture_item_id)
+      if (item) itemsMap[pf.furniture_item_id] = item
+    }
+
+    const result = await renderRoomPreview({
+      room,
+      finishMaterials,
+      placedFurniture,
+      variants: variantsMap,
+      items: itemsMap,
+      cameraWallIdx: wallIdx,
+    })
+
+    if (result.error || !result.blob) {
+      setError(result.error ?? 'Render failed')
+      setStatus('error')
+      return
+    }
+
+    blobRef.current = result.blob
+    setWarnings(result.warnings)
+    const url = URL.createObjectURL(result.blob)
+    imageUrlRef.current = url
+    setImageUrl(url)
+    setStatus('complete')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, finishMaterials])
+
+  // Initial render
+  useEffect(() => {
+    renderPreview(0)
     return () => {
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
+      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const handleWallChange = (idx: number) => {
+    if (idx === selectedWallIdx && status !== 'error') return
+    setSelectedWallIdx(idx)
+    renderPreview(idx)
+  }
 
   const handleDownload = () => {
     if (!imageUrl || !room) return
     const a = document.createElement('a')
     a.href = imageUrl
-    a.download = `${room.name}_preview.png`
+    a.download = `${room.name}_wall${selectedWallIdx + 1}_preview.png`
     a.click()
   }
 
@@ -121,6 +143,20 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           <button className="preview-close" onClick={onClose}>
             <X size={18} />
           </button>
+        </div>
+
+        {/* Wall selector */}
+        <div className="preview-wall-bar">
+          {Array.from({ length: numWalls }, (_, i) => (
+            <button
+              key={i}
+              className={`preview-wall-btn ${selectedWallIdx === i ? 'active' : ''}`}
+              onClick={() => handleWallChange(i)}
+              disabled={status === 'rendering'}
+            >
+              Wall {i + 1}
+            </button>
+          ))}
         </div>
 
         {/* Content */}
@@ -223,6 +259,39 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
         .preview-close:hover {
           background: var(--color-hover-bg);
           color: var(--color-text-primary);
+        }
+        .preview-wall-bar {
+          display: flex;
+          gap: 6px;
+          padding: 10px 16px;
+          border-bottom: 1px solid var(--color-border-custom);
+          background: var(--color-card-bg);
+          flex-wrap: wrap;
+        }
+        .preview-wall-btn {
+          padding: 5px 14px;
+          border-radius: 6px;
+          border: 1.5px solid var(--color-border-custom);
+          background: none;
+          color: var(--color-text-secondary);
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+        }
+        .preview-wall-btn:hover:not(:disabled) {
+          border-color: var(--color-primary-brand);
+          color: var(--color-primary-brand);
+        }
+        .preview-wall-btn.active {
+          background: linear-gradient(135deg, #2BA8A0, #238C85);
+          border-color: transparent;
+          color: white;
+        }
+        .preview-wall-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
         .preview-content {
           flex: 1;
