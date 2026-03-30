@@ -25,6 +25,7 @@ export default function CatalogOverview() {
   const [categories, setCategories] = useState<FurnitureCategory[]>([])
   const [variantsByItem, setVariantsByItem] = useState<Map<string, FurnitureVariant[]>>(new Map())
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(true)
 
@@ -56,8 +57,9 @@ export default function CatalogOverview() {
 
   const filteredItems = items.filter((item) => {
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter
+    const matchesCategory = categoryFilter === 'all' || item.category_id === categoryFilter
     const matchesSearch = !search || item.name.toLowerCase().includes(search.toLowerCase())
-    return matchesStatus && matchesSearch
+    return matchesStatus && matchesCategory && matchesSearch
   })
 
   const statusCounts = items.reduce<Record<string, number>>((acc, item) => {
@@ -104,6 +106,23 @@ export default function CatalogOverview() {
             >
               {f.label}
               {f.value !== 'all' && <span className="pill-count">{statusCounts[f.value] ?? 0}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="catalog-category-pills">
+          <button
+            className={`catalog-category-pill ${categoryFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setCategoryFilter('all')}
+          >
+            All Categories
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              className={`catalog-category-pill ${categoryFilter === cat.id ? 'active' : ''}`}
+              onClick={() => setCategoryFilter(cat.id)}
+            >
+              {cat.name}
             </button>
           ))}
         </div>
@@ -268,6 +287,27 @@ export default function CatalogOverview() {
           font-size: 10px;
           font-weight: 700;
           opacity: 0.7;
+        }
+        .catalog-category-pills {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+        .catalog-category-pill {
+          padding: 4px 10px;
+          border-radius: 6px;
+          border: none;
+          font-size: 11px;
+          font-weight: 500;
+          cursor: pointer;
+          font-family: inherit;
+          background: var(--color-hover-bg);
+          color: var(--color-text-secondary);
+          transition: all 0.15s;
+        }
+        .catalog-category-pill.active {
+          background: var(--color-secondary);
+          color: white;
         }
         .catalog-loading {
           color: var(--color-text-secondary);
