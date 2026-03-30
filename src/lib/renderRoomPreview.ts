@@ -417,9 +417,22 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
     // ── Render ───────────────────────────────────────────────────────────────
     renderer.render(scene, camera)
 
+    // Mirror the rendered image horizontally.
+    // Three.js camera.lookAt() computes right = cross(forward, up), which for
+    // CCW-wound rooms always points opposite to the wall's A→B direction,
+    // producing a left-right flipped view. A global image flip corrects this
+    // for all elements (walls, doors, windows, furniture) at once.
+    const mirrorCanvas = document.createElement('canvas')
+    mirrorCanvas.width = PREVIEW_WIDTH
+    mirrorCanvas.height = PREVIEW_HEIGHT
+    const ctx = mirrorCanvas.getContext('2d')!
+    ctx.translate(PREVIEW_WIDTH, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(canvas, 0, 0)
+
     // Export as PNG blob
     const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
+      mirrorCanvas.toBlob(
         (b) => (b ? resolve(b) : reject(new Error('toBlob returned null'))),
         'image/png'
       )
