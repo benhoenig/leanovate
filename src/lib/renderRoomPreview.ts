@@ -232,63 +232,64 @@ export async function renderRoomPreview(params: RenderParams): Promise<RenderRes
     }
 
     // ── Camera ───────────────────────────────────────────────────────────────
+    // Professional interior photography: camera at midpoint of one wall,
+    // looking straight across to the opposite wall → symmetric one-point perspective.
     const camera = new THREE.PerspectiveCamera(
-      75, // Wide FOV for small room interiors
+      70,
       PREVIEW_WIDTH / PREVIEW_HEIGHT,
       0.1,
       100
     )
 
     const EYE_HEIGHT = 1.6 // 160cm standing height
-    const WALL_OFFSET = 0.35 // Stand close to wall (like real interior photos)
+    const WALL_OFFSET = 0.4 // Distance from wall into room
 
-    // Position camera: try to find a door position, otherwise use a corner
-    const doors = room.geometry?.doors ?? []
-    let camPos: { u: number; v: number }
-
-    // Compute inward offset from a wall point
-    const offsetInward = (wu: number, wv: number, wallDu: number, wallDv: number, dist: number) => {
-      // Inward normal for CCW winding: (-dv, du) normalized
-      const normalU = -wallDv
-      const normalV = wallDu
-      const normalLen = Math.sqrt(normalU ** 2 + normalV ** 2)
-      if (normalLen < 0.001) return { u: wu, v: wv }
-      return {
-        u: wu + (normalU / normalLen) * dist,
-        v: wv + (normalV / normalLen) * dist,
-      }
+    // Compute inward normal for a wall segment (CCW winding)
+    const wallInwardNormal = (du: number, dv: number) => {
+      const len = Math.sqrt(du * du + dv * dv)
+      if (len < 0.001) return { nu: 0, nv: 0 }
+      return { nu: -dv / len, nv: du / len }
     }
+
+    // Find the best "camera wall" — prefer the wall with a door (photographer
+    // stands in the doorway), otherwise pick the shortest wall so we look
+    // across the longest dimension of the room for maximum depth.
+    const doors = room.geometry?.doors ?? []
+    let cameraWallIdx = 0
 
     if (doors.length > 0) {
-      // Stand at the first door, just inside the room
-      const door = doors[0]
-      const wallIdx = door.wall_index ?? 0
-      const wa = vertices[wallIdx % vertices.length]
-      const wb = vertices[(wallIdx + 1) % vertices.length]
-      const doorU = wa.u + (wb.u - wa.u) * door.position
-      const doorV = wa.v + (wb.v - wa.v) * door.position
-
-      camPos = offsetInward(doorU, doorV, wb.u - wa.u, wb.v - wa.v, WALL_OFFSET)
+      cameraWallIdx = doors[0].wall_index ?? 0
     } else {
-      // Fallback: stand at first vertex corner, offset inward along both adjacent walls
-      const wa = vertices[0]
-      const wb = vertices[1]
-      const wc = vertices[vertices.length - 1]
-
-      // Offset along wall 0→1
-      const off1 = offsetInward(wa.u, wa.v, wb.u - wa.u, wb.v - wa.v, WALL_OFFSET)
-      // Also offset along wall (last)→0
-      const off2 = offsetInward(wa.u, wa.v, wa.u - wc.u, wa.v - wc.v, WALL_OFFSET)
-
-      camPos = {
-        u: wa.u + (off1.u - wa.u) + (off2.u - wa.u),
-        v: wa.v + (off1.v - wa.v) + (off2.v - wa.v),
+      // Pick shortest wall — looking across gives the best depth perspective
+      let minLen = Infinity
+      for (let i = 0; i < vertices.length; i++) {
+        const a = vertices[i]
+        const b = vertices[(i + 1) % vertices.length]
+        const len = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
+        if (len < minLen) { minLen = len; cameraWallIdx = i }
       }
     }
 
-    camera.position.set(camPos.u, EYE_HEIGHT, camPos.v)
-    // Look at centroid at nearly eye-level (slight downward gaze to see furniture)
-    camera.lookAt(centroid.u, EYE_HEIGHT * 0.85, centroid.v)
+    // Camera position: midpoint of camera wall, offset inward
+    const camA = vertices[cameraWallIdx % vertices.length]
+    const camB = vertices[(cameraWallIdx + 1) % vertices.length]
+    const camMidU = (camA.u + camB.u) / 2
+    const camMidV = (camA.v + camB.v) / 2
+    const camWallDu = camB.u - camA.u
+    const camWallDv = camB.v - camA.v
+    const { nu: camNu, nv: camNv } = wallInwardNormal(camWallDu, camWallDv)
+
+    const camPosU = camMidU + camNu * WALL_OFFSET
+    const camPosV = camMidV + camNv * WALL_OFFSET
+
+    // Look target: project straight across the room along the inward normal.
+    // Use a large distance so we look perpendicular to the camera wall.
+    const lookDist = 10
+    const lookU = camPosU + camNu * lookDist
+    const lookV = camPosV + camNv * lookDist
+
+    camera.position.set(camPosU, EYE_HEIGHT, camPosV)
+    camera.lookAt(lookU, EYE_HEIGHT * 0.92, lookV)
 
     // ── Render ───────────────────────────────────────────────────────────────
     renderer.render(scene, camera)
