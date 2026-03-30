@@ -138,21 +138,27 @@ async function renderIsometricSprites(
   renderer.setSize(SPRITE_SIZE, SPRITE_SIZE)
   renderer.setPixelRatio(1)
   renderer.setClearColor(0x000000, 0) // Transparent background
+  renderer.toneMapping = THREE.NoToneMapping // Prevent darkening
+  renderer.outputColorSpace = THREE.SRGBColorSpace
 
   // Set up scene
   const scene = new THREE.Scene()
 
-  // Lighting (same as Edge Function)
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+  // Lighting — bright enough to match the original product photo
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.4)
   scene.add(ambientLight)
 
-  const dirLight = new THREE.DirectionalLight(0xfff5e0, 1.2)
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.8)
   dirLight.position.set(5, 10, 7)
   scene.add(dirLight)
 
-  const fillLight = new THREE.DirectionalLight(0xe0f0ff, 0.4)
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.8)
   fillLight.position.set(-5, 3, -5)
   scene.add(fillLight)
+
+  const backLight = new THREE.DirectionalLight(0xffffff, 0.5)
+  backLight.position.set(0, 5, -8)
+  scene.add(backLight)
 
   // Load GLB from buffer
   const loader = new GLTFLoader()
