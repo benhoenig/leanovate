@@ -1,15 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { X, Link, Loader2, Upload, Plus, Trash2, ChevronRight } from 'lucide-react'
+import { X, Link, Loader2, Upload, Plus, Trash2, ChevronRight, Camera, ImageIcon } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { supabase } from '@/lib/supabase'
 
 interface Props {
   onClose: () => void
 }
 
-// ── Scraped data shape (matches edge function response) ───────────────────────
-interface ScrapedData {
+// ── Extracted data shape (matches edge function response) ─────────────────────
+interface ExtractedData {
   name: string
   description: string
   price_thb: number | null
@@ -61,9 +60,13 @@ export default function AddFurnitureModal({ onClose }: Props) {
   // ── Step 1 state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<1 | 2>(1)
   const [url, setUrl] = useState('')
-  const [isScraping, setIsScraping] = useState(false)
-  const [scraped, setScraped] = useState<ScrapedData | null>(null)
-  const [scrapeError, setScrapeError] = useState<string | null>(null)
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null)
+  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null)
+  const [isExtracting, setIsExtracting] = useState(false)
+  const [extracted, setExtracted] = useState<ExtractedData | null>(null)
+  const [extractError, setExtractError] = useState<string | null>(null)
+  const screenshotInputRef = useRef<HTMLInputElement | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   // Editable fields (pre-filled from scrape)
   const [name, setName] = useState('')
@@ -81,29 +84,106 @@ export default function AddFurnitureModal({ onClose }: Props) {
   const [isSavingVariants, setIsSavingVariants] = useState(false)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
-  // ─── Step 1: Scrape ─────────────────────────────────────────────────────────
+  // ─── Step 1: Screenshot extraction ──────────────────────────────────────────
 
-  const handleScrape = async () => {
-    const trimmed = url.trim()
-    if (!trimmed) return
-    setScrapeError(null)
-    setIsScraping(true)
+  const handleScreenshotSelect = (file: File) => {
+    setScreenshotFile(file)
+    setScreenshotPreview(URL.createObjectURL(file))
+    setExtracted(null)
+    setExtractError(null)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file && file.type.startsWith('image/')) {
+      handleScreenshotSelect(file)
+    }
+  }
+
+  const handlePaste = useCallback((e: ClipboardEvent) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) {
+          handleScreenshotSelect(file)
+          break
+        }
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    document.addEventListener('paste', handlePaste)
+    return () => document.removeEventListener('paste', handlePaste)
+  }, [handlePaste])
+
+  const handleExtract = async () => {
+    if (!screenshotFile) return
+    setExtractError(null)
+    setIsExtracting(true)
+    console.log('[Extract] Starting extraction from screenshot…')
     try {
-      const { data, error } = await supabase.functions.invoke('scrape-product', {
-        body: { url: trimmed },
+      // Convert file to base64
+      const buffer = await screenshotFile.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+
+      const SUPA_URL = import.meta.env.VITE_SUPABASE_URL
+      const SUPA_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY
+      let token = SUPA_ANON
+      try {
+        const storageKey = `sb-${new URL(SUPA_URL).hostname.split('.')[0]}-auth-token`
+        const raw = localStorage.getItem(storageKey)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          const accessToken = parsed?.access_token ?? parsed?.currentSession?.access_token ?? parsed?.session?.access_token
+          const expiresAt = parsed?.expires_at ?? 0
+          const now = Math.floor(Date.now() / 1000)
+          if (accessToken && expiresAt > now + 30) {
+            token = accessToken
+          }
+        }
+      } catch { /* fall back to anon key */ }
+
+      const resp = await fetch(`${SUPA_URL}/functions/v1/extract-from-screenshot`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'apikey': SUPA_ANON,
+        },
+        body: JSON.stringify({
+          image_base64: base64,
+          media_type: screenshotFile.type || 'image/png',
+        }),
       })
-      if (error || data?.error) {
-        setScrapeError(data?.error ?? error?.message ?? 'Scrape failed')
-        // Still let designer proceed with manual entry
-        const domain = extractDomain(trimmed)
-        setScraped({ name: '', description: '', price_thb: null, width_cm: null, depth_cm: null, height_cm: null, source_domain: domain })
+
+      console.log('[Extract] Response status:', resp.status)
+      if (!resp.ok) {
+        const text = await resp.text()
+        console.error('[Extract] HTTP error:', resp.status, text)
+        setExtractError(`Extraction failed (HTTP ${resp.status})`)
+        return
+      }
+
+      const data = await resp.json()
+      console.log('[Extract] Response data:', data)
+
+      if (data?.error) {
+        console.warn('[Extract] Server returned error:', data.error)
+        setExtractError(data.error)
       } else {
-        const result = data as ScrapedData
-        setScraped(result)
-        setName(result.name || '')
-        setDescription(result.description || '')
+        const result = data as ExtractedData
+        console.log('[Extract] Success — name:', result.name, '| price:', result.price_thb, '| dims:', result.width_cm, '×', result.depth_cm, '×', result.height_cm)
+        setExtracted(result)
+        if (result.name) setName(result.name)
+        if (result.description) setDescription(result.description)
         if (result.price_thb != null) {
-          // Pre-fill in first variant
           setVariants((prev) => {
             const updated = [...prev]
             updated[0] = { ...updated[0], price_thb: String(result.price_thb) }
@@ -115,11 +195,11 @@ export default function AddFurnitureModal({ onClose }: Props) {
         if (result.height_cm != null) setHeightCm(String(result.height_cm))
       }
     } catch (err) {
-      setScrapeError('Could not reach the scraper. Fill in details manually.')
-      const domain = extractDomain(trimmed)
-      setScraped({ name: '', description: '', price_thb: null, width_cm: null, depth_cm: null, height_cm: null, source_domain: domain })
+      console.error('[Extract] Network/fetch error:', err)
+      setExtractError('Could not reach the extraction service. Fill in details manually.')
     } finally {
-      setIsScraping(false)
+      setIsExtracting(false)
+      console.log('[Extract] Done')
     }
   }
 
@@ -127,7 +207,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
     if (!name.trim() || !categoryId) return
     setIsSavingItem(true)
     try {
-      const domain = scraped?.source_domain ?? extractDomain(url)
+      const domain = url.trim() ? extractDomain(url) : 'manual'
       console.log('[AddFurniture] Creating item…', { name: name.trim(), categoryId, domain })
       const { id, error } = await createItem({
         name: name.trim(),
@@ -280,34 +360,75 @@ export default function AddFurnitureModal({ onClose }: Props) {
         {/* Step 1 */}
         {step === 1 && (
           <div className="modal-body">
-            {/* URL + Scrape */}
+            {/* Screenshot drop zone */}
             <div className="field-group">
-              <label className="field-label">Product Link (optional)</label>
-              <div className="url-row">
-                <div className="url-input-wrap">
-                  <Link size={13} className="url-icon" />
-                  <input
-                    className="url-input"
-                    placeholder="https://shopee.co.th/… or https://ikea.com/…"
-                    value={url}
-                    onChange={(e) => { setUrl(e.target.value); setScraped(null); setScrapeError(null) }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleScrape()}
-                  />
+              <label className="field-label">Product Screenshot</label>
+              <input
+                ref={screenshotInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleScreenshotSelect(file)
+                  e.target.value = ''
+                }}
+              />
+              {screenshotPreview ? (
+                <div className="screenshot-preview-wrap">
+                  <img src={screenshotPreview} alt="Product screenshot" className="screenshot-preview-img" />
+                  <div className="screenshot-preview-actions">
+                    <button
+                      className="screenshot-change-btn"
+                      onClick={() => screenshotInputRef.current?.click()}
+                    >
+                      <ImageIcon size={12} />
+                      Change
+                    </button>
+                    <button
+                      className="btn-primary extract-btn"
+                      onClick={handleExtract}
+                      disabled={isExtracting}
+                    >
+                      {isExtracting ? <Loader2 size={13} className="spin" /> : <Camera size={13} />}
+                      {isExtracting ? 'Extracting…' : 'Extract Details'}
+                    </button>
+                  </div>
                 </div>
-                <button
-                  className="scrape-btn"
-                  onClick={handleScrape}
-                  disabled={!url.trim() || isScraping}
+              ) : (
+                <div
+                  className={`screenshot-drop-zone ${isDragging ? 'dragging' : ''}`}
+                  onClick={() => screenshotInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
                 >
-                  {isScraping ? <Loader2 size={13} className="spin" /> : 'Scrape Details'}
-                </button>
+                  <Camera size={24} />
+                  <span className="screenshot-drop-title">Drop product screenshot here</span>
+                  <span className="screenshot-drop-hint">or click to upload — also supports Ctrl+V paste</span>
+                  <span className="screenshot-drop-hint">Works with Shopee, IKEA, or any furniture site</span>
+                </div>
+              )}
+              {extractError && (
+                <p className="field-hint error">{extractError} — fill in details manually below.</p>
+              )}
+              {extracted && !extractError && (
+                <p className="field-hint success">Details extracted from screenshot. Review and edit below.</p>
+              )}
+            </div>
+
+            {/* Product Link (reference for purchasing) */}
+            <div className="field-group">
+              <label className="field-label">Product Link (for purchasing reference)</label>
+              <div className="url-input-wrap">
+                <Link size={13} className="url-icon" />
+                <input
+                  className="url-input"
+                  placeholder="https://shopee.co.th/… or https://ikea.com/…"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                />
               </div>
-              {scrapeError && (
-                <p className="field-hint error">{scrapeError} — fill in details manually below.</p>
-              )}
-              {scraped && !scrapeError && (
-                <p className="field-hint success">Details scraped from {scraped.source_domain}. Review and edit below.</p>
-              )}
             </div>
 
             {/* Name */}
@@ -647,12 +768,78 @@ export default function AddFurnitureModal({ onClose }: Props) {
         .field-hint.error { color: var(--color-error); }
         .field-hint.success { color: var(--color-success); }
 
-        .url-row {
+        .screenshot-drop-zone {
+          border: 2px dashed var(--color-border-custom);
+          border-radius: 10px;
+          padding: 24px 16px;
           display: flex;
-          gap: 8px;
+          flex-direction: column;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          color: var(--color-text-secondary);
+          background: var(--color-input-bg);
+          transition: all 0.15s;
         }
+        .screenshot-drop-zone:hover, .screenshot-drop-zone.dragging {
+          border-color: var(--color-primary-brand);
+          background: var(--color-primary-brand-light);
+          color: var(--color-primary-brand);
+        }
+        .screenshot-drop-title {
+          font-size: 13px;
+          font-weight: 600;
+          margin-top: 4px;
+        }
+        .screenshot-drop-hint {
+          font-size: 11px;
+          opacity: 0.7;
+        }
+        .screenshot-preview-wrap {
+          border: 1px solid var(--color-border-custom);
+          border-radius: 10px;
+          overflow: hidden;
+          background: var(--color-card-bg);
+        }
+        .screenshot-preview-img {
+          width: 100%;
+          max-height: 180px;
+          object-fit: contain;
+          display: block;
+          background: var(--color-input-bg);
+        }
+        .screenshot-preview-actions {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px 10px;
+          border-top: 1px solid var(--color-border-custom);
+        }
+        .screenshot-change-btn {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 5px 10px;
+          border-radius: 6px;
+          border: 1px solid var(--color-border-custom);
+          background: none;
+          color: var(--color-text-secondary);
+          font-size: 11px;
+          font-weight: 600;
+          font-family: inherit;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .screenshot-change-btn:hover {
+          border-color: var(--color-primary-brand);
+          color: var(--color-primary-brand);
+        }
+        .extract-btn {
+          padding: 6px 14px;
+          font-size: 12px;
+        }
+
         .url-input-wrap {
-          flex: 1;
           position: relative;
           display: flex;
           align-items: center;
@@ -675,24 +862,6 @@ export default function AddFurnitureModal({ onClose }: Props) {
           outline: none;
         }
         .url-input:focus { border-color: var(--color-primary-brand); }
-        .scrape-btn {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          padding: 8px 14px;
-          border-radius: 8px;
-          background: var(--color-primary-brand);
-          color: white;
-          font-size: 12px;
-          font-weight: 600;
-          font-family: inherit;
-          border: none;
-          cursor: pointer;
-          white-space: nowrap;
-          transition: background 0.15s;
-        }
-        .scrape-btn:hover:not(:disabled) { background: var(--color-primary-brand-hover); }
-        .scrape-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .style-pills-wrap {
           display: flex;

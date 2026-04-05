@@ -1,19 +1,21 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Boxes, ArrowLeft, ClipboardCheck, Package, Link2, Users } from 'lucide-react'
+import { Boxes, ArrowLeft, ClipboardCheck, Package, Link2, Users, Cpu } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import PendingApprovalQueue from '@/components/admin/PendingApprovalQueue'
 import CatalogOverview from '@/components/admin/CatalogOverview'
 import LinkHealthOverview from '@/components/admin/LinkHealthOverview'
 import TeamManagement from '@/components/admin/TeamManagement'
+import AIUsageOverview from '@/components/admin/AIUsageOverview'
 
-type AdminTab = 'pending' | 'catalog' | 'link-health' | 'team'
+type AdminTab = 'pending' | 'catalog' | 'link-health' | 'team' | 'ai-usage'
 
 const TABS: { value: AdminTab; label: string; icon: React.ReactNode }[] = [
   { value: 'pending', label: 'Pending', icon: <ClipboardCheck size={15} /> },
   { value: 'catalog', label: 'Catalog', icon: <Package size={15} /> },
   { value: 'link-health', label: 'Link Health', icon: <Link2 size={15} /> },
   { value: 'team', label: 'Team', icon: <Users size={15} /> },
+  { value: 'ai-usage', label: 'AI Usage', icon: <Cpu size={15} /> },
 ]
 
 export default function AdminPage() {
@@ -60,6 +62,7 @@ export default function AdminPage() {
         {activeTab === 'catalog' && <CatalogOverview />}
         {activeTab === 'link-health' && <LinkHealthOverview />}
         {activeTab === 'team' && <TeamManagement />}
+        {activeTab === 'ai-usage' && <AIUsageOverview />}
       </main>
 
       <style>{`

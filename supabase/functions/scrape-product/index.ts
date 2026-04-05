@@ -18,6 +18,14 @@ interface ScrapedProduct {
   depth_cm: number | null
   height_cm: number | null
   source_domain: string
+  _debug?: string[]
+}
+
+// Collects debug trace lines that get returned in the response body
+const debugTrace: string[] = []
+function trace(msg: string) {
+  debugTrace.push(msg)
+  console.log(msg)
 }
 
 const CORS_HEADERS = {
@@ -32,7 +40,11 @@ serve(async (req) => {
   }
 
   try {
+    // Reset debug trace for each request
+    debugTrace.length = 0
+
     const { url } = await req.json()
+    trace('[scrape-product] Received URL: ' + url)
     if (!url || typeof url !== 'string') {
       return jsonError('url is required', 400)
     }
@@ -41,68 +53,136 @@ serve(async (req) => {
     try {
       domain = new URL(url).hostname.replace('www.', '')
     } catch {
+      trace('[scrape-product] Invalid URL: ' + url)
       return jsonError('Invalid URL', 400)
     }
 
+    trace('[scrape-product] Domain: ' + domain)
+
     let result: ScrapedProduct
+    let strategy: string
 
     if (domain.includes('shopee.co.th') || domain.includes('shopee.')) {
+      strategy = 'shopee'
+      trace('[scrape-product] Using Shopee strategy')
       result = await scrapeShopee(url, domain)
     } else if (domain.includes('ikea.com')) {
+      strategy = 'ikea'
+      trace('[scrape-product] Using IKEA strategy')
       result = await scrapeIkea(url, domain)
     } else {
-      // Generic fallback — try Open Graph / JSON-LD
+      strategy = 'generic'
+      trace('[scrape-product] Using generic fallback strategy')
       result = await scrapeGeneric(url, domain)
     }
+
+    trace(`[scrape-product] ${strategy} result: name="${result.name?.slice(0, 60)}" price=${result.price_thb} dims=${result.width_cm}×${result.depth_cm}×${result.height_cm}`)
+
+    // Attach debug trace to response
+    result._debug = [...debugTrace]
 
     return new Response(JSON.stringify(result), {
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
   } catch (err) {
-    console.error('scrape-product error:', err)
-    return jsonError('Scrape failed: ' + String(err), 500)
+    trace('[scrape-product] Unhandled error: ' + String(err))
+    return new Response(JSON.stringify({ error: 'Scrape failed: ' + String(err), _debug: [...debugTrace] }), {
+      status: 500,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
   }
 })
 
 // ── Shopee ────────────────────────────────────────────────────────────────────
 
 async function scrapeShopee(url: string, domain: string): Promise<ScrapedProduct> {
+  // Resolve short URLs (s.shopee.co.th/xxx) by following redirects to get the real product URL
+  let resolvedUrl = url
+  if (domain.startsWith('s.shopee') || !url.match(/i\.(\d+)\.(\d+)/) && !url.match(/\/(\d+)\/(\d+)\/?$/)) {
+    trace('[shopee] Short/non-standard URL detected, resolving redirect…')
+    try {
+      const redirectResp = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        signal: AbortSignal.timeout(8000),
+      })
+      resolvedUrl = redirectResp.url
+      trace('[shopee] Resolved to: ' + resolvedUrl)
+      // Update domain from resolved URL
+      try {
+        domain = new URL(resolvedUrl).hostname.replace('www.', '')
+      } catch { /* keep original domain */ }
+    } catch (err) {
+      trace('[shopee] Redirect resolution failed: ' + String(err))
+    }
+  }
+
   // Extract item ID and shop ID from URL
   // Shopee URLs: /product/{shopid}/{itemid} or /-i.{shopid}.{itemid}
-  const itemMatch = url.match(/i\.(\d+)\.(\d+)/) ?? url.match(/\/(\d+)\/(\d+)\/?$/)
+  trace('[shopee] Trying regex on: ' + resolvedUrl)
+  const m1 = resolvedUrl.match(/i\.(\d+)\.(\d+)/)
+  const m2 = resolvedUrl.match(/\/product\/(\d+)\/(\d+)/)
+  const m3 = resolvedUrl.match(/\/(\d+)\/(\d+)\/?(?:[?#]|$)/)
+  trace('[shopee] Regex results: m1=' + JSON.stringify(m1?.slice(0,3)) + ' m2=' + JSON.stringify(m2?.slice(0,3)) + ' m3=' + JSON.stringify(m3?.slice(0,3)))
+  const itemMatch = m1 ?? m2 ?? m3
   if (!itemMatch) {
-    // Fall back to generic HTML scrape
-    return scrapeGeneric(url, domain)
+    trace('[shopee] No itemid/shopid found — falling back to generic')
+    return scrapeGeneric(resolvedUrl, domain)
   }
 
   const shopId = itemMatch[1]
   const itemId = itemMatch[2]
+  trace('[shopee] Extracted shopId=' + shopId + ' itemId=' + itemId)
 
   // Shopee public product API (no auth required for basic product data)
   const apiUrl = `https://shopee.co.th/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`
+  trace('[shopee] Fetching API: ' + apiUrl)
   const resp = await fetch(apiUrl, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Referer': 'https://shopee.co.th',
+      'Accept': 'application/json',
     },
   })
 
+  trace('[shopee] API response status: ' + resp.status)
   if (!resp.ok) {
+    trace('[shopee] API returned non-OK, falling back to generic')
     return scrapeGeneric(url, domain)
   }
 
-  const json = await resp.json()
-  const item = json?.data ?? json?.result?.item
+  const rawText = await resp.text()
+  trace('[shopee] API response length: ' + rawText.length + ' chars')
+  trace('[shopee] API response preview: ' + rawText.slice(0, 500))
+
+  let json: Record<string, unknown>
+  try {
+    json = JSON.parse(rawText)
+  } catch {
+    trace('[shopee] Failed to parse API JSON, falling back to generic')
+    return scrapeGeneric(url, domain)
+  }
+
+  trace('[shopee] API top-level keys: ' + Object.keys(json).join(', '))
+  const item = (json?.data as Record<string, unknown>) ?? (json as Record<string, unknown>)?.item ?? ((json as Record<string, unknown>)?.result as Record<string, unknown>)?.item
+  trace('[shopee] item found: ' + !!item + ' | keys: ' + (item ? Object.keys(item).slice(0, 15).join(',') : 'n/a'))
 
   if (!item) {
+    trace('[shopee] No item data in response — top-level JSON: ' + JSON.stringify(json).slice(0, 300))
+    trace('[shopee] Falling back to generic')
     return scrapeGeneric(url, domain)
   }
 
-  const name = item.name ?? ''
-  const description = item.description ?? ''
+  const name = (item as Record<string, unknown>).name as string ?? ''
+  const description = (item as Record<string, unknown>).description as string ?? ''
   // Price is in cents (price_min / 100000)
-  const price = item.price_min != null ? Math.round(item.price_min / 100000) : null
+  const priceMin = (item as Record<string, unknown>).price_min as number | undefined
+  const price = priceMin != null ? Math.round(priceMin / 100000) : null
   const priceThb = price != null && price > 0 ? price : null
+  trace('[shopee] Parsed: name="' + (name || '').slice(0, 60) + '" price_min=' + priceMin + ' price_thb=' + priceThb)
 
   // Try to extract dimensions from description using regex
   const dims = parseDimensions(description)
@@ -119,7 +199,9 @@ async function scrapeShopee(url: string, domain: string): Promise<ScrapedProduct
 // ── IKEA ──────────────────────────────────────────────────────────────────────
 
 async function scrapeIkea(url: string, domain: string): Promise<ScrapedProduct> {
+  trace('[ikea] Fetching HTML…')
   const html = await fetchHtml(url)
+  trace('[ikea] HTML received: ' + (html ? `${html.length} chars` : 'null'))
   if (!html) return emptyResult(domain)
 
   // IKEA embeds JSON-LD and Open Graph
@@ -159,7 +241,9 @@ async function scrapeIkea(url: string, domain: string): Promise<ScrapedProduct> 
 // ── Generic fallback ──────────────────────────────────────────────────────────
 
 async function scrapeGeneric(url: string, domain: string): Promise<ScrapedProduct> {
+  trace('[generic] Fetching HTML…')
   const html = await fetchHtml(url)
+  trace('[generic] HTML received: ' + (html ? `${html.length} chars` : 'null (fetch failed or timed out)'))
   if (!html) return emptyResult(domain)
 
   const jsonLd = extractJsonLd(html)
@@ -185,6 +269,7 @@ async function scrapeGeneric(url: string, domain: string): Promise<ScrapedProduc
 
 async function fetchHtml(url: string): Promise<string | null> {
   try {
+    trace('[fetchHtml] Fetching: ' + url)
     const resp = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -193,9 +278,16 @@ async function fetchHtml(url: string): Promise<string | null> {
       },
       signal: AbortSignal.timeout(10000),
     })
-    if (!resp.ok) return null
-    return await resp.text()
-  } catch {
+    trace('[fetchHtml] Status: ' + resp.status + ' | content-type: ' + resp.headers.get('content-type'))
+    if (!resp.ok) {
+      trace('[fetchHtml] Non-OK response, returning null')
+      return null
+    }
+    const text = await resp.text()
+    trace('[fetchHtml] Got ' + text.length + ' chars')
+    return text
+  } catch (err) {
+    trace('[fetchHtml] Error: ' + String(err))
     return null
   }
 }
