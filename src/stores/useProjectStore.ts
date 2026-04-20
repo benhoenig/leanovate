@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Project, Room, FinishMaterial } from '@/types'
-import { supabase } from '@/lib/supabase'
+import { supabase, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 
 interface ProjectState {
@@ -58,29 +58,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const profile = useAuthStore.getState().profile
     if (!profile) return { id: null, error: 'Not authenticated' }
     try {
-      const { data, error } = await supabase
-        .from('projects')
-        .insert({
-          name,
-          description: description ?? null,
-          owner_id: profile.id,
-          status: 'draft',
-          unit_width_cm: 1000,
-          unit_height_cm: 800,
-          manual_costs: {},
-        })
-        .select()
-        .single()
-      if (error) return { id: null, error: error.message }
+      const { data, error } = await rawInsert<Project>('projects', {
+        name,
+        description: description ?? null,
+        owner_id: profile.id,
+        status: 'draft',
+        unit_width_cm: 1000,
+        unit_height_cm: 800,
+        manual_costs: {},
+      })
+      if (error || !data) return { id: null, error: error ?? 'Insert failed' }
       await get().loadProjects()
-      return { id: (data as Project).id, error: null }
+      return { id: data.id, error: null }
     } catch {
       return { id: null, error: 'Failed to create project' }
     }
   },
 
   updateProject: async (id, updates) => {
-    const { error } = await supabase.from('projects').update(updates).eq('id', id)
+    const { error } = await rawUpdate('projects', id, updates)
     if (error) {
       console.error('Failed to update project:', error)
       return
@@ -93,7 +89,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   deleteProject: async (id) => {
-    const { error } = await supabase.from('projects').delete().eq('id', id)
+    const { error } = await rawDelete('projects', id)
     if (error) {
       console.error('Failed to delete project:', error)
       return
@@ -126,26 +122,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   addRoom: async (projectId, name) => {
     const roomCount = get().rooms.length
     try {
-      const { data, error } = await supabase
-        .from('rooms')
-        .insert({
-          project_id: projectId,
-          name,
-          x: 0,
-          y: 0,
-          width_cm: 300,
-          height_cm: 300,
-          ceiling_height_cm: 260,
-          geometry: { walls: [], doors: [], windows: [] },
-          finishes: {},
-          sort_order: roomCount,
-        })
-        .select()
-        .single()
-      if (error) return { id: null, error: error.message }
-      const newRoom = data as Room
-      set((state) => ({ rooms: [...state.rooms, newRoom], selectedRoomId: newRoom.id, isDirty: false }))
-      return { id: newRoom.id, error: null }
+      const { data, error } = await rawInsert<Room>('rooms', {
+        project_id: projectId,
+        name,
+        x: 0,
+        y: 0,
+        width_cm: 300,
+        height_cm: 300,
+        ceiling_height_cm: 260,
+        geometry: { walls: [], doors: [], windows: [] },
+        finishes: {},
+        sort_order: roomCount,
+      })
+      if (error || !data) return { id: null, error: error ?? 'Insert failed' }
+      set((state) => ({ rooms: [...state.rooms, data], selectedRoomId: data.id, isDirty: false }))
+      return { id: data.id, error: null }
     } catch {
       return { id: null, error: 'Failed to add room' }
     }
@@ -156,14 +147,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       rooms: state.rooms.map((r) => (r.id === id ? { ...r, ...updates } : r)),
       isDirty: true,
     }))
-    const { error } = await supabase.from('rooms').update(updates).eq('id', id)
+    const { error } = await rawUpdate('rooms', id, updates)
     if (error) {
       console.error('Failed to update room:', error)
     }
   },
 
   deleteRoom: async (id) => {
-    const { error } = await supabase.from('rooms').delete().eq('id', id)
+    const { error } = await rawDelete('rooms', id)
     if (error) {
       console.error('Failed to delete room:', error)
       return
@@ -180,17 +171,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!currentProject) return
     set({ isLoading: true })
     try {
-      const roomUpdates = rooms.map((r) =>
-        supabase.from('rooms').update({
+      // Sequential to avoid Supabase client concurrency deadlock
+      for (const r of rooms) {
+        await rawUpdate('rooms', r.id, {
           name: r.name,
           width_cm: r.width_cm,
           height_cm: r.height_cm,
           geometry: r.geometry,
           finishes: r.finishes,
           sort_order: r.sort_order,
-        }).eq('id', r.id)
-      )
-      await Promise.all(roomUpdates)
+        })
+      }
       set({ isDirty: false })
       useAuthStore.getState() // keep reference, toast shown by caller
     } catch (error) {

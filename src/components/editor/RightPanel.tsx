@@ -7,6 +7,8 @@ import { useUIStore } from '@/stores/useUIStore'
 import type { RoomGeometry, RoomDoor, RoomWindow, CurtainStyle } from '@/types'
 import { migrateFixtureWallIndex } from '@/lib/roomGeometry'
 import CostPanel from './CostPanel'
+import BlockPicker from './BlockPicker'
+import { blockStepCm } from '@/lib/blockGrid'
 
 export default function RightPanel() {
   const { rooms, selectedRoomId, updateRoom } = useProjectStore()
@@ -55,7 +57,7 @@ export default function RightPanel() {
 
 // ── Furniture Properties ──────────────────────────────────────────────────────
 
-function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; direction: string; price_at_placement: number | null; scale_factor: number } }) {
+function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number } }) {
   const { rotateItem, scaleItem, commitScale, switchVariant, removeItem } = useCanvasStore()
   const scaleBeforeRef = useRef(placed.scale_factor ?? 1)
   const catalogState = useCatalogStore()
@@ -70,16 +72,6 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
       catalogState.loadVariantsForItem(placed.furniture_item_id)
     }
   }, [placed.furniture_item_id])
-
-  // Load sprites for all variants
-  useEffect(() => {
-    for (const v of variants) {
-      const sprites = catalogState.getSpritesForVariant(v.id)
-      if (sprites.length === 0 && v.render_status === 'completed') {
-        catalogState.loadSpritesForVariant(v.id)
-      }
-    }
-  }, [variants.length])
 
   const price = currentVariant?.price_thb ?? placed.price_at_placement
   const formattedPrice = price != null
@@ -115,8 +107,8 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
                 onClick={() => switchVariant(placed.id, v.id, v.price_thb)}
                 title={v.color_name}
               >
-                {v.original_image_url ? (
-                  <img src={v.original_image_url} alt={v.color_name} className="fp-swatch-img" />
+                {v.original_image_urls[0] ? (
+                  <img src={v.original_image_urls[0]} alt={v.color_name} className="fp-swatch-img" />
                 ) : (
                   <span className="fp-swatch-text">{v.color_name.slice(0, 2)}</span>
                 )}
@@ -165,13 +157,25 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
             <span className="fp-scale-pct">%</span>
           </div>
         </div>
-        <div className="fp-direction">Facing: {placed.direction.replace('_', ' ')}</div>
+        <div className="fp-direction">Rotation: {Math.round(placed.rotation_deg)}°</div>
         {sourceUrl && sourceUrl !== 'manual' && (
           <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="fp-link">
             <ExternalLink size={11} /> View product
           </a>
         )}
       </div>
+
+      <div className="panel-divider" />
+
+      {/* Placement controls — edit the master item/variant, not just this instance */}
+      {item && currentVariant && (
+        <PlacementSection
+          item={item}
+          variant={currentVariant}
+          categoryDefaultBlock={category?.default_block_size ?? 'big'}
+          categoryIsFlat={category?.is_flat ?? false}
+        />
+      )}
 
       <div className="panel-divider" />
 
@@ -185,6 +189,261 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
         </button>
       </div>
     </>
+  )
+}
+
+// ── Placement section (block size, flat toggle, dimensions) ─────────────────
+
+function PlacementSection({
+  item,
+  variant,
+  categoryDefaultBlock,
+  categoryIsFlat,
+}: {
+  item: import('@/types').FurnitureItem
+  variant: import('@/types').FurnitureVariant
+  categoryDefaultBlock: import('@/types').BlockSize
+  categoryIsFlat: boolean
+}) {
+  const { updateItem, updateVariant } = useCatalogStore()
+
+  const effectiveBlock = item.block_size_override ?? categoryDefaultBlock
+  const effectiveIsFlat = item.is_flat_override ?? categoryIsFlat
+  const stepCm = blockStepCm(effectiveBlock)
+
+  const widthCm = variant.width_cm ?? item.width_cm ?? stepCm
+  const depthCm = variant.depth_cm ?? item.depth_cm ?? stepCm
+  const heightCm = variant.height_cm ?? item.height_cm ?? stepCm
+
+  const setBlockOverride = (size: import('@/types').BlockSize | null) => {
+    void updateItem(item.id, { block_size_override: size })
+  }
+  const setFlatOverride = (flat: boolean | null) => {
+    void updateItem(item.id, { is_flat_override: flat })
+  }
+  const setDims = (w: number, d: number) => {
+    void updateVariant(variant.id, { width_cm: w, depth_cm: d })
+  }
+  const setHeight = (h: number) => {
+    void updateVariant(variant.id, { height_cm: h })
+  }
+
+  return (
+    <div className="panel-section">
+      <span className="section-title">PLACEMENT</span>
+
+      {/* Block size — category default + override */}
+      <div className="pc-row">
+        <label className="pc-label">Block size</label>
+        <div className="pc-segmented">
+          <button
+            type="button"
+            className={`pc-seg ${item.block_size_override === null || item.block_size_override === undefined ? 'active' : ''}`}
+            onClick={() => setBlockOverride(null)}
+            title={`Inherit from ${categoryDefaultBlock === 'small' ? 'Small' : 'Big'} category default`}
+          >
+            Auto
+          </button>
+          <button
+            type="button"
+            className={`pc-seg ${item.block_size_override === 'big' ? 'active' : ''}`}
+            onClick={() => setBlockOverride('big')}
+          >
+            Big
+          </button>
+          <button
+            type="button"
+            className={`pc-seg ${item.block_size_override === 'small' ? 'active' : ''}`}
+            onClick={() => setBlockOverride('small')}
+          >
+            Small
+          </button>
+        </div>
+      </div>
+      <span className="pc-hint">
+        Using <b>{effectiveBlock}</b> ({stepCm}cm grid)
+        {item.block_size_override === null || item.block_size_override === undefined ? ' — category default' : ' — per-item override'}
+      </span>
+
+      {/* Flat-item toggle */}
+      <div className="pc-row">
+        <label className="pc-label">Flat item</label>
+        <div className="pc-segmented">
+          <button
+            type="button"
+            className={`pc-seg ${item.is_flat_override === null || item.is_flat_override === undefined ? 'active' : ''}`}
+            onClick={() => setFlatOverride(null)}
+            title={`Inherit from category (${categoryIsFlat ? 'flat' : 'standard'})`}
+          >
+            Auto
+          </button>
+          <button
+            type="button"
+            className={`pc-seg ${item.is_flat_override === false ? 'active' : ''}`}
+            onClick={() => setFlatOverride(false)}
+          >
+            Standard
+          </button>
+          <button
+            type="button"
+            className={`pc-seg ${item.is_flat_override === true ? 'active' : ''}`}
+            onClick={() => setFlatOverride(true)}
+          >
+            Flat
+          </button>
+        </div>
+      </div>
+      <span className="pc-hint">
+        Using <b>{effectiveIsFlat ? 'flat' : 'standard'}</b>
+        {effectiveIsFlat ? ' — skips TRELLIS, renders as floor plane' : ' — uses .glb model'}
+      </span>
+
+      {/* Dimensions */}
+      <div className="pc-dims-row">
+        <div className="pc-dims-col">
+          <span className="pc-dims-label">Footprint (W × D)</span>
+          <BlockPicker
+            widthCm={widthCm}
+            depthCm={depthCm}
+            stepCm={stepCm}
+            onChange={setDims}
+          />
+        </div>
+        <div className="pc-dims-col pc-dims-col--narrow">
+          <span className="pc-dims-label">Fine-tune</span>
+          <div className="pc-cm-row">
+            <label className="pc-cm-label">W</label>
+            <input
+              type="number"
+              className="pc-cm-input"
+              min={1}
+              value={widthCm}
+              onChange={(e) => setDims(Math.max(1, parseInt(e.target.value) || 0), depthCm)}
+            />
+          </div>
+          <div className="pc-cm-row">
+            <label className="pc-cm-label">D</label>
+            <input
+              type="number"
+              className="pc-cm-input"
+              min={1}
+              value={depthCm}
+              onChange={(e) => setDims(widthCm, Math.max(1, parseInt(e.target.value) || 0))}
+            />
+          </div>
+          <div className="pc-cm-row">
+            <label className="pc-cm-label">H</label>
+            <input
+              type="number"
+              className="pc-cm-input"
+              min={1}
+              value={heightCm}
+              onChange={(e) => setHeight(Math.max(1, parseInt(e.target.value) || 0))}
+              disabled={effectiveIsFlat}
+            />
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        .pc-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-top: 8px;
+        }
+        .pc-label {
+          font-size: 11px;
+          font-weight: 500;
+          color: var(--color-text-secondary);
+        }
+        .pc-segmented {
+          display: flex;
+          border: 1px solid var(--color-border-custom);
+          border-radius: 6px;
+          overflow: hidden;
+        }
+        .pc-seg {
+          padding: 3px 8px;
+          border: none;
+          border-right: 1px solid var(--color-border-custom);
+          background: transparent;
+          color: var(--color-text-secondary);
+          font-size: 10px;
+          font-weight: 600;
+          font-family: inherit;
+          cursor: pointer;
+          transition: all 0.1s;
+        }
+        .pc-seg:last-child {
+          border-right: none;
+        }
+        .pc-seg:hover {
+          background: var(--color-hover-bg);
+        }
+        .pc-seg.active {
+          background: var(--color-primary-brand);
+          color: white;
+        }
+        .pc-hint {
+          font-size: 10px;
+          color: var(--color-text-secondary);
+          margin-top: 3px;
+          display: block;
+        }
+        .pc-dims-row {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 10px;
+          margin-top: 10px;
+          align-items: start;
+        }
+        .pc-dims-col {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .pc-dims-col--narrow {
+          width: 70px;
+        }
+        .pc-dims-label {
+          font-size: 10px;
+          font-weight: 600;
+          color: var(--color-text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+        }
+        .pc-cm-row {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .pc-cm-label {
+          font-size: 10px;
+          font-weight: 600;
+          color: var(--color-text-secondary);
+          width: 12px;
+        }
+        .pc-cm-input {
+          flex: 1;
+          padding: 3px 5px;
+          border: 1px solid var(--color-border-custom);
+          border-radius: 4px;
+          background: var(--color-input-bg);
+          font-size: 11px;
+          font-family: inherit;
+          outline: none;
+          width: 100%;
+        }
+        .pc-cm-input:focus {
+          border-color: var(--color-primary-brand);
+        }
+        .pc-cm-input:disabled {
+          opacity: 0.4;
+        }
+      `}</style>
+    </div>
   )
 }
 

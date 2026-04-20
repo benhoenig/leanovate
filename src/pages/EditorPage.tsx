@@ -8,7 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useTemplateStore } from '@/stores/useTemplateStore'
 import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
-import IsometricCanvas from '@/components/editor/IsometricCanvas'
+import RoomCanvas from '@/components/editor/RoomCanvas'
 import RotationControls from '@/components/editor/RotationControls'
 import ZoomControls from '@/components/editor/ZoomControls'
 import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
@@ -44,18 +44,11 @@ export default function EditorPage() {
   useEffect(() => {
     if (!selectedRoomId) return
     useCanvasStore.getState().loadPlacedFurniture(selectedRoomId).then(() => {
-      // Preload sprites for all placed items' variants
       const placed = useCanvasStore.getState().placedFurniture
       const catalog = useCatalogStore.getState()
       for (const item of placed) {
-        // Load variants if needed
         if (!catalog.variants[item.furniture_item_id]) {
           catalog.loadVariantsForItem(item.furniture_item_id)
-        }
-        // Load sprites if needed
-        const sprites = catalog.getSpritesForVariant(item.selected_variant_id)
-        if (sprites.length === 0) {
-          catalog.loadSpritesForVariant(item.selected_variant_id)
         }
       }
 
@@ -180,7 +173,7 @@ export default function EditorPage() {
         <main className="editor-canvas" style={canvasCursor ? { cursor: canvasCursor } : undefined}>
           {selectedRoom ? (
             <>
-              <IsometricCanvas room={selectedRoom} finishMaterials={finishMaterials} />
+              <RoomCanvas room={selectedRoom} finishMaterials={finishMaterials} />
               <RotationControls />
               <ZoomControls />
             </>

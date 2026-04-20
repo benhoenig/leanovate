@@ -4,7 +4,17 @@
  * Vertices are stored counter-clockwise when viewed from above.
  */
 
-import type { Room, RoomVertex, RoomGeometry, RoomDoor, RoomWindow, Direction, PhysicalWall } from '@/types'
+import type { Room, RoomVertex, RoomGeometry, RoomDoor, RoomWindow, PhysicalWall } from '@/types'
+
+/**
+ * The 4 isometric camera presets used by both the legacy PixiJS canvas (room
+ * rotation) and the room perspective preview. This is a UI/render concept,
+ * not a DB column — `placed_furniture.rotation_deg` is a continuous float now.
+ */
+export type RoomRotation = 'front_left' | 'front_right' | 'back_left' | 'back_right'
+
+/** Backwards-compat alias while consumers migrate. Will be removed in 8b. */
+export type Direction = RoomRotation
 
 // ── Vertex retrieval ─────────────────────────────────────────────────────────
 

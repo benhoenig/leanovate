@@ -7,10 +7,10 @@
 
 export type UserRole = 'admin' | 'designer'
 export type ItemStatus = 'draft' | 'pending' | 'approved' | 'rejected'
-export type ImageStatus = 'processing' | 'pending_approval' | 'approved' | 'rejected'
 export type RenderStatus = 'waiting' | 'processing' | 'completed' | 'failed'
-export type Direction = 'front_left' | 'front_right' | 'back_left' | 'back_right'
+export type RenderApprovalStatus = 'pending' | 'approved' | 'rejected'
 export type LinkStatus = 'active' | 'inactive' | 'unchecked'
+export type BlockSize = 'big' | 'small'
 export type ProjectStatus = 'draft' | 'completed'
 export type FinishType = 'wall' | 'floor' | 'door' | 'window' | 'lighting'
 export type CurtainStyle = 'none' | 'open' | 'closed'
@@ -108,6 +108,8 @@ export interface FurnitureCategory {
   name: string
   icon: string | null
   sort_order: number
+  is_flat: boolean
+  default_block_size: BlockSize
 }
 
 export interface Style {
@@ -127,6 +129,8 @@ export interface FurnitureItem {
   height_cm: number | null
   description: string | null
   status: ItemStatus
+  is_flat_override: boolean | null
+  block_size_override: BlockSize | null
   submitted_by: string
   reviewed_by: string | null
   reviewed_at: string | null
@@ -143,25 +147,16 @@ export interface FurnitureVariant {
   width_cm: number | null
   depth_cm: number | null
   height_cm: number | null
-  original_image_url: string
-  clean_image_url: string | null
-  image_status: ImageStatus
+  original_image_urls: string[]
   glb_path: string | null
   render_status: RenderStatus
+  render_approval_status: RenderApprovalStatus
   link_status: LinkStatus
   last_checked_at: string | null
   price_changed: boolean
   sort_order: number
   created_at: string
   updated_at: string
-}
-
-export interface FurnitureSprite {
-  id: string
-  variant_id: string
-  direction: Direction
-  image_path: string
-  created_at: string
 }
 
 // --- Placed Furniture ---
@@ -171,9 +166,14 @@ export interface PlacedFurniture {
   room_id: string
   furniture_item_id: string
   selected_variant_id: string
-  x: number
-  y: number
-  direction: Direction
+  /** Horizontal position in room-local cm. */
+  x_cm: number
+  /** Vertical offset in cm. 0 = floor; non-zero = wall-mounted (art, mirrors, wall shelves). */
+  y_cm: number
+  /** Depth position in room-local cm (Three.js Y axis is up, so this is the old "y"). */
+  z_cm: number
+  /** Rotation in degrees, 0–360. Replaces the old 4-direction enum. */
+  rotation_deg: number
   price_at_placement: number | null
   scale_factor: number
   sort_order: number
@@ -219,9 +219,9 @@ export interface UnitLayoutTemplate {
 export interface FurnitureLayoutSlot {
   category_id: string
   room_name: string
-  x: number
-  y: number
-  direction: Direction
+  x_cm: number
+  z_cm: number
+  rotation_deg: number
 }
 
 export interface FurnitureLayoutTemplate {
@@ -240,9 +240,9 @@ export interface DesignStyleItem {
   furniture_item_id: string
   variant_id: string
   room_name: string
-  x: number
-  y: number
-  direction: Direction
+  x_cm: number
+  z_cm: number
+  rotation_deg: number
   price_at_save: number | null
 }
 

@@ -1,13 +1,15 @@
-# Implementation Plan — LEANOVATE
+# Implementation Plan — LEANOVATE V2
 
-> **Document scope:** Build order, phases, and what's in each phase. No time estimates — phases are sequenced by dependency, not calendar.
+> **This is the active plan.** The previous plan (original 6 phases, now shipped) is archived at `implementation-plan-legacy.md` for reference only.
+>
+> **Document scope:** Post-V1 direction and phases. Real-user testing of V1 surfaced two architectural improvements that are now locked in — this doc plans them.
 >
 > **Out of scope (covered in other docs):**
 >
 > | File | Owns |
 > |---|---|
 > | `product-spec.md` | Features, user stories, interaction flows |
-> | `tech-stack.md` | Technology choices, libraries, versions, folder structure |
+> | `tech-stack.md` | Technology choices, libraries, versions, rationale, folder structure |
 > | `schema.md` | Database tables, fields, relationships |
 > | `design.md` | Visual system — colors, typography, component styling |
 > | `state-map.md` | Zustand store domains and ownership |
@@ -15,296 +17,238 @@
 
 ---
 
+## Context — Why V2
+
+The original 6 phases shipped and the full MVP works end-to-end. Real-user testing (the project owner using the app as a designer would) surfaced two architectural problems:
+
+### Problem 1: Fragile AI pipeline
+
+The TRELLIS pipeline produces inconsistent results on varied real-world product photos (different sizes, lighting, backgrounds, lifestyle shots vs clean shots, flat items like rugs). The rembg step + hard approval gate was supposed to catch issues before spending TRELLIS API cost, but it added its own failure points and didn't actually fix the underlying variance problem. Designer time spent fixing bad outputs was starting to eat the time savings templates are supposed to deliver.
+
+### Problem 2: Isometric sprites fight the asset nature
+
+The stack generates `.glb` 3D models via TRELLIS, then flattens them into 4 isometric sprite PNGs, then displays the sprites in a 2D PixiJS canvas. That's real engineering effort spent turning 3D assets into 2D tiles — and the result is a canvas that feels static, locks furniture to 4 angles only, and exposes asset quality issues as "weird flat cutouts" rather than "slightly off 3D shapes." A Three.js scene using the `.glb` files directly would be simpler code, use the assets as intended, and produce a Sims-like UX that matches how designers actually think about space.
+
+### V2 direction (confirmed)
+
+- **Stream A — Pipeline simplification**: drop rembg, support multi-image TRELLIS input, add flat-item bypass, move approval gate post-TRELLIS, keep the pipeline itself minimal for v1 (designers handle messy source photos externally before uploading).
+- **Stream B — 3D canvas pivot**: replace PixiJS isometric canvas with Three.js 3D scene, Sims-style. Direct `.glb` rendering, snap-to-grid block sizing, design/roam camera modes. Drop sprite rendering entirely.
+
+Sequence: **A before B.** The 3D canvas displays `.glb` files directly — better-quality `.glb` coming out of A is a prerequisite for B to look good.
+
+---
+
 ## Phasing Principles
 
-1. **Each phase produces something testable.** No phase ends with invisible infrastructure — you should be able to click around and verify it works before moving on.
-2. **Data first, visuals on top.** Build the data layer before the UI that displays it. Avoids building with fake data then rewiring.
-3. **Complete flows, not half-features.** If a feature spans multiple integrations (e.g. add furniture → scrape → rembg → TRELLIS → sprites), build the whole pipeline in one phase rather than splitting it across phases with placeholder statuses.
-4. **Foundation before speed.** Get the core working correctly before adding templates and shortcuts that accelerate workflows.
+Same as V1:
+
+1. Each phase produces something testable.
+2. Data first, visuals on top.
+3. Complete flows, not half-features.
+4. Foundation before speed.
+
+Plus one V2 principle:
+
+5. **Clean slate over migration.** The project has no paying users yet. Delete old test projects/rooms/placed furniture during the canvas pivot rather than writing migration code for transient data.
 
 ---
 
 ## Phase Overview
 
-| Phase | Name | Builds On | What You Can Test After |
-|---|---|---|---|
-| 1 | Foundation | — | Log in, see empty dashboard, navigate to empty editor, deployed on Vercel |
-| 2 | Room Builder | Phase 1 | Create a unit, add rooms, set dimensions, apply finishes, save/reopen project |
-| 3 | Furniture Catalog + AI Pipeline | Phase 1 | Add furniture from Shopee/IKEA link, upload color variants, approve images, see isometric sprites generated |
-| 4 | Isometric Canvas | Phase 2 + 3 | Place real furniture with real sprites on canvas, drag, rotate items, rotate room, switch colors |
-| 5 | Templates + Cost Summary | Phase 4 | Save/apply templates across all 3 layers, regenerate styles, see live cost breakdown with staleness alerts |
-| 6 | Room Preview + Admin + Daily Recheck | Phase 4 + 5 | Click "Preview Room" for interior vignette, admin approves furniture, manage team, link recheck runs daily |
+| Phase | Name | Stream | Est. Effort | Depends On |
+|---|---|---|---|---|
+| 7 | TRELLIS Pipeline Improvements | A | ~few days | V1 complete |
+| 8 | 3D Canvas Rebuild (Sims-style) | B | ~1–2 weeks | Phase 7 |
 
 ---
 
-## Phase 1: Foundation
+## Phase 7: TRELLIS Pipeline Improvements
 
-Get the boring infrastructure right so everything after this builds on solid ground.
+Simplify the pipeline, improve `.glb` quality, stop fighting edge cases the pipeline was never going to handle well.
 
-**What to build:**
+### What to build
 
-- Vite + React + TypeScript project scaffolding
-- Tailwind CSS + shadcn/ui configured with design system CSS variables from `design.md`
-- Supabase project: database, auth, storage buckets (as defined in `integration-contracts.md`)
-- Supabase Auth integration: sign up, log in, log out
-- `profiles` table with role field (admin/designer), auto-created on sign up
-- Zustand stores: empty shells for all 6 stores from `state-map.md`
-- React Router: login page → dashboard → editor (all empty shells with correct routes)
-- Deploy to Vercel with GitHub auto-deploy
+**Drop rembg entirely**
+- Delete `supabase/functions/remove-background/` Edge Function
+- Remove rembg-era fields from `furniture_variants`: `clean_image_url`, `image_status`
+- Remove the pre-TRELLIS image approval gate and associated UI (`ImageApprovalModal.tsx`)
+- TRELLIS does its own background removal internally — stop double-processing
 
-**What to test:**
-- Sign up → profile created in database with designer role
-- Log in → land on dashboard
-- Navigate to editor → empty page loads
-- Open on phone → pages are responsive
-- Push code to GitHub → Vercel auto-deploys
+**Multi-image upload per variant**
+- Schema change: `furniture_variants.original_image_url text` → `original_image_urls text[]` (1–6 images per variant)
+- Upload UI (`AddFurnitureModal.tsx`): drag-and-drop multi-file widget, reorderable thumbnails
+- `generate-3d-model` Edge Function: accept array of signed URLs, pass all to TRELLIS `images[]` input
+- TRELLIS multi-image input is the biggest `.glb` quality lever — designer provides 2–4 real product-page angle shots when available
 
-**Reference docs:** `tech-stack.md` (all technology choices), `design.md` (CSS variables), `schema.md` (profiles table), `state-map.md` (store names), `integration-contracts.md` (Supabase Auth, Storage buckets)
+**Flat-item bypass**
+- Schema: `furniture_categories.is_flat boolean default false`; seeded true for rugs, wall art, curtains, bedding, mirrors
+- Schema: `furniture_items.is_flat_override boolean nullable` (admin/designer per-item override)
+- When effective `is_flat = true`: skip `generate-3d-model` entirely. Use the first uploaded image directly as the sprite / canvas asset. No TRELLIS cost, no `.glb`, no weird distorted rugs.
 
----
+**Post-TRELLIS approval gate**
+- Schema: `furniture_variants.render_approval_status enum('pending','approved','rejected') default 'pending'`
+- New modal: `ModelApprovalModal.tsx` — renders the generated `.glb` in a small Three.js preview (spin 360°), optionally shows the 4 sprite angles, designer clicks approve / reject / re-upload
+- Replaces the old "approve clean image" gate. Designer can see the actual 3D output before committing the variant to the canvas.
+- Variant is usable on canvas before approval (with original photo fallback as placeholder) — approval just removes the "pending" badge.
 
-## Phase 2: Room Builder
+**`generate-3d-model` Edge Function updates**
+- Accept `images: string[]` instead of single URL
+- Sign URLs for each image
+- Pass array directly to TRELLIS `images` input
+- Keep existing settings: `texture_size: 1024`, `mesh_simplify: 0.95`, `generate_model: true`, everything else false/default
+- Remove the `image_status === 'approved'` check (since rembg gate is gone — the pre-check becomes: at least one uploaded image exists)
 
-The unit configurator — walls, rooms, finishes. No furniture yet.
+**Designer external preprocessing workflow**
+- New doc: `docs/designer-workflow.md` — instructs designers on how to prep messy/lifestyle photos before uploading:
+  - Recommended tool: Nano Banana (Google Gemini image generation)
+  - Prompt template: *"Isolate only the [item type] from this image. Generate [N] separate clean product shots on pure white background: front view, 3/4 angle view, side view. Output as separate images, not a composite."*
+  - Upload the prepped outputs to Leanovate
+- Keep this workflow external for v1. Do NOT build Nano Banana into the app. Designer manages the messy-input problem before the app sees the data.
 
-**What to build:**
+### What to test
 
-- Project CRUD: create, rename, delete projects
-- Dashboard: list of designer's projects with "New Project" button
-- Room CRUD within a project: add rooms, rename, delete, reorder
-- Unit layout configurator: set unit dimensions, set room dimensions, position walls/doors/windows
-- Room geometry stored as JSON in `rooms` table
-- Finish customization: wall color, flooring material, door style, window style, lighting from preset `finish_materials` table + custom texture upload
-- PixiJS canvas initialized: renders the isometric room shell (walls, floor) from geometry data
-- Room list in left sidebar with room selection
-- Save/load projects to Supabase
-- `isDirty` tracking: "unsaved changes" warning on navigation
+- Upload a variant with 3 clean product-page photos → TRELLIS output is noticeably cleaner than single-image mode
+- Upload a rug → flat-item bypass kicks in, sprite = original photo, no TRELLIS call, no cost
+- Upload a per-item override for a non-rug flat-ish item (e.g. thin headboard) → bypass works
+- Upload only lifestyle photos → TRELLIS output is bad (expected) → designer re-preps via Nano Banana externally → re-upload → output is clean
+- Reject a bad `.glb` via the new modal → variant goes back to `pending`, designer can re-upload and retry
 
-**What to test:**
-- Create a project "Unit 1204"
-- Add a living room (450×380cm) and bedroom (300×350cm)
-- Set finishes: oak flooring, white walls, warm lighting
-- Upload a custom wallpaper texture
-- See the isometric room shell rendered on canvas
-- Save, close, reopen — everything persists
-- Try to navigate away with unsaved changes — warning appears
+### Reference docs to update
 
-**Reference docs:** `product-spec.md` (user stories #1–3), `schema.md` (projects, rooms, finish_materials tables), `integration-contracts.md` (Supabase Storage for textures)
-
----
-
-## Phase 3: Furniture Catalog + AI Pipeline
-
-Build the complete data pipeline from "paste a link" to "isometric sprites ready." No canvas placement yet — sprites are generated and viewable in the catalog.
-
-**What to build:**
-
-- Seed `furniture_categories` and `styles` tables with initial data
-- Catalog browser in left sidebar: search bar, category filter pills, furniture item list
-- Add Furniture modal — Step 1:
-  - Designer pastes product link
-  - Edge Function validates source domain + scrapes product details
-  - Designer reviews/overrides scraped name, description, dimensions
-  - `furniture_items` record created (status: draft)
-- Add Furniture modal — Step 2:
-  - Designer uploads color variant images with color name
-  - Optional: separate price, product link, size overrides per variant
-  - `furniture_variants` records created
-- rembg integration:
-  - Background removal runs on each uploaded image
-  - Clean image stored in Supabase Storage
-  - `image_status`: processing → pending_approval
-- Image approval gate:
-  - Designer sees clean image, clicks approve or reject
-  - Reject: upload a better photo, rembg re-runs
-  - Approve: `image_status` → approved
-- TRELLIS integration:
-  - Approved image sent to Replicate API
-  - .glb file returned and stored in Supabase Storage
-  - `render_status`: waiting → processing
-- Three.js sprite rendering:
-  - .glb file rendered into 4 isometric angle PNGs
-  - Sprites stored in Supabase Storage
-  - `furniture_sprites` rows created
-  - `render_status`: processing → completed
-- Catalog displays items with: status dot, name, category, price, color swatches, sprite thumbnails (or original photo while processing)
-- Item status flow for admin: draft → pending → approved/rejected
-- Style tagging: assign styles to furniture items
-
-**What to test:**
-- Click "Add Furniture" → paste a Shopee link → see name/description scraped
-- Override the scraped name → save
-- Upload 3 color variant photos (blue, beige, black)
-- See backgrounds removed in ~2 seconds per image
-- Review clean images → approve all 3
-- Wait ~1 minute per variant → see .glb generated → see 4 sprite images appear
-- Browse catalog → search for "sofa" → filter by "Sofa" category → see the item with 3 color swatches
-- Change item status to pending → log in as admin → see it in pending list → approve → now visible to all
-
-**Reference docs:** `product-spec.md` (user stories #12–14), `schema.md` (furniture_items, furniture_variants, furniture_sprites, furniture_item_styles, furniture_categories, styles tables), `integration-contracts.md` (scraping, rembg, TRELLIS, Three.js sprite rendering, Supabase Storage), `state-map.md` (Catalog Store)
+- `schema.md` — `original_image_urls[]`, drop `clean_image_url`/`image_status`, add `render_approval_status`, `is_flat`, `is_flat_override`
+- `integration-contracts.md` — update TRELLIS section (multi-image, no rembg), remove the rembg section entirely, remove the Three.js sprite rendering section too (Phase 8 drops sprites — but note Phase 7 keeps them working so cross-reference accordingly)
+- `CLAUDE.md` — Phase 7 completion notes after shipping
 
 ---
 
-## Phase 4: Isometric Canvas + Furniture Placement
+## Phase 8: 3D Canvas Rebuild (Sims-style)
 
-The core interaction — placing real furniture with real sprites on the isometric canvas.
+Replace the PixiJS isometric canvas with a Three.js 3D scene that renders `.glb` files directly.
 
-**What to build:**
+### What to build
 
-- PixiJS canvas: render placed furniture sprites on the isometric grid
-- Click-to-select from catalog: click a furniture item in sidebar → enter placement mode
-- Click-to-place on canvas: click a position → furniture appears with default variant's sprite
-- Drag to reposition placed items
-- Furniture rotation: click to cycle through 4 isometric directions (sprite swaps to matching direction image)
-- Room view rotation: NW/NE/SE/SW buttons, entire room + all furniture rotates
-- Color variant switching: select a placed item → right panel shows color swatches → click to swap variant (sprites swap instantly)
-- Selected item properties in right panel: name, category, source, dimensions, current variant, price
-- Remove item from canvas
-- Original product photo as fallback when sprites aren't ready yet
-- `placed_furniture` records saved to Supabase
-- `price_at_placement` recorded when item is placed
+**Canvas core**
+- Rename `IsometricCanvas.tsx` → `RoomCanvas.tsx`
+- Replace PixiJS with a Three.js `WebGLRenderer` scene
+- Room shell rendering reuses the logic from `src/lib/renderRoomPreview.ts`: polygon floor, walls with door/window cutouts, ceiling, finish materials from `finish_materials` table
+- Furniture rendered from `.glb` via `GLTFLoader`, cached per variant ID (one loaded model reused across instances)
+- For flat items (`is_flat = true`): render as a thin textured plane using the sprite image, placed flat on the floor (rugs) or vertically on a wall (wall art) — no `.glb` expected
+- Placeholder when `.glb` missing or pending approval: simple semi-transparent box primitive sized to the variant's dimensions
 
-**What to test:**
-- Browse catalog → click a sofa → cursor changes to placement mode
-- Click on the living room canvas → sofa sprite appears at that position
-- Drag it to a better position → it moves smoothly
-- Click rotate → sofa shows from next angle
-- Click NE rotation button → entire room rotates, all furniture shows matching angle
-- Select the sofa → right panel shows 3 color swatches → click beige → sprite swaps instantly, price updates
-- Save project → reopen → all placed furniture still there with correct positions, variants, and rotations
+**Camera modes**
+- **Design mode** (default): orbit camera around room centroid, pitch locked ~30–50°, zoom limits, can't clip through walls. Mouse drag rotates, scroll zooms.
+- **Roam mode**: first-person camera at 160cm eye height, WASD movement, mouse look. Toggleable via a button in the toolbar ("🚶 Roam" → "🎨 Design"). For client presentation.
+- Both modes share the same scene; toggling just swaps the camera and its controls
 
-**Reference docs:** `product-spec.md` (user stories #8–10, #15), `schema.md` (placed_furniture table), `state-map.md` (Canvas Store — references Catalog Store by ID), `design.md` (floating rotation controls, color swatches)
+**Interaction**
+- Click-to-place: raycast from mouse into floor plane, compute `(x_cm, z_cm)`, snap to grid, drop a ghost mesh, click to commit
+- Click-to-select: raycast against furniture meshes, highlight selected (emissive outline or bounding box)
+- Drag-to-move: selected item's position tracks raycast hit on floor plane, snaps to grid, Ctrl bypasses snap
+- Rotate: replace `direction` enum with continuous `rotation_deg float`. Wheel-scroll on selected item rotates; snaps to 15° increments, Ctrl bypasses
+- Delete/Backspace: remove selected item (same as V1)
 
----
+**Block sizing system**
+- Two grid sizes: **big = 100cm**, **small = 25cm**
+- Schema: `furniture_categories.default_block_size enum('big','small') default 'big'`
+  - Seed: main furniture (sofa, bed, dining table, wardrobe, desk, bookshelf, TV stand) → big; accessories (lamp, plant, side table, vase, small decor) → small
+- Schema: `furniture_items.block_size_override enum('big','small') nullable`
+- Effective block size = `block_size_override ?? category.default_block_size`
+- Placement snap uses the effective block size for that item
+- Block picker UI in the properties panel: visual W×D chess-grid selector. User picks cells → writes continuous cm values to variant dimensions (e.g. 3×2 big blocks → 300×200cm). Alongside: manual cm number inputs for fine-tune. Selector and number inputs stay in sync.
 
-## Phase 5: Templates + Cost Summary
+**Features to port from PixiJS canvas**
+- Polygon room shapes + shape edit mode (vertex handles, midpoint-add handles, delete-vertex, Reset to Rectangle)
+- Finish materials (walls, floor, doors, windows, lighting) — reuse perspective preview material logic
+- Door/window fixtures with `wall_index` + position along segment
+- Room rotation (becomes design-mode camera presets: NW/NE/SE/SW orbit positions)
+- Placement mode with ghost mesh
+- Properties panel — selected furniture properties (name, category, variant swatches, price, dimensions, block picker, rotate, remove)
+- Cost summary panel (unchanged — it reads from stores, not from the canvas)
+- Templates (unit / furniture / style) — unchanged logic, just writes to the new data model
 
-The speed multipliers — one-click generation and live pricing.
+**Features to drop**
+- `src/lib/renderSprites.ts` — no longer needed, delete
+- `furniture_sprites` table — drop via migration
+- `sprites` bucket — keep for Phase 7 flat-item sprites, but stop generating 4-angle sprites from `.glb`
+- `placed_furniture.direction` enum → replaced by `rotation_deg`
 
-**What to build:**
+**Construction drawings**
+- Update `src/lib/renderConstructionDrawings.ts` to render from the Three.js scene using `OrthographicCamera`:
+  - Floor plan: top-down ortho camera, render to offscreen canvas
+  - Elevations: ortho camera at each wall's outward-facing midpoint, perpendicular to wall plane
+- Reuse existing dimension-line + title-block overlay logic (drawn on Canvas 2D on top of the rendered image)
+- Multi-page PDF export unchanged
 
-- Save as unit layout template: snapshot current rooms + geometry + finishes
-- Save as furniture layout template: snapshot furniture category positions (no specific products)
-- Save as design style template: snapshot full arrangement with specific products + variants
-- Template browser in left sidebar (Templates tab): browse all 3 layers, personal vs global badges
-- Apply unit layout template: populates project with rooms/geometry/finishes
-- Apply furniture layout template: places category slots on canvas
-- Apply design style template: fills slots with specific products + variants
-- Regenerate/shuffle: re-randomize product picks within same style (reads from Catalog Store items tagged with that style)
-- Template permissions: designer creates personal, admin promotes to global
-- Cost summary panel (right panel, Cost tab):
-  - Live-calculated furniture total from placed variants' current prices
-  - Manual renovation/finish cost entries (editable)
-  - Grand total
-  - Subtotals per section
-- Staleness alerts on project open: compare `price_at_placement` vs current price, surface differences
-- Template staleness check on apply: compare `price_at_save` vs current price, check link status, warn before applying
+**Data model changes (`placed_furniture`)**
+- `x` → `x_cm float` (clearer that it's cm in world space)
+- `y` → `z_cm float` (Y axis is up in Three.js; the old `y` was horizontal depth)
+- Add `y_cm float default 0` (vertical offset — 0 for floor items, non-zero for wall-mounted items like art / mirrors / wall shelves)
+- Replace `direction direction` enum → `rotation_deg float default 0`
+- `price_at_placement` unchanged
 
-**What to test:**
-- Design a complete 1BR unit with furniture
-- Save as "Modern 1BR — Set A" style template
-- Create a new project with the same unit layout
-- Apply the style template → all furniture places itself in one click with correct products, variants, and positions
-- Click regenerate → products shuffle to different items in the same style
-- Open cost tab → see furniture total + manual costs + grand total
-- Change a product price in the database → reopen project → see staleness alert "1 item has a price change"
-- Apply a template where one product link went inactive → see warning before applying
+**Migration (clean slate)**
+- Truncate `projects`, `rooms`, `placed_furniture` (no paying users, no data worth preserving)
+- Drop `furniture_sprites` table
+- Retain `furniture_items`, `furniture_variants`, `.glb` files in `glb-models` bucket, `finish_materials`
+- Retain templates data (will need light migration if direction enum is referenced in `items_data` JSON — unlikely but check)
 
-**Reference docs:** `product-spec.md` (user stories #4–7, #16–18, #21), `schema.md` (three template tables, placed_furniture.price_at_placement, design_style_templates.items_data.price_at_save), `state-map.md` (Template Store cross-store operations)
+**Performance**
+- Instanced meshes: duplicates of the same variant (e.g. 4 dining chairs) share one `.glb` load via `InstancedMesh` where possible
+- Draco / Meshopt compression on `.glb` files (TRELLIS supports this — enable in `generate-3d-model` if not already)
+- LOD fallback: placeholder box when `.glb` is missing, loading, or rejected
+- Target 30fps on desktop Chrome with 30+ furniture items in the scene
 
----
+**Tablet support**
+- Out of scope for Phase 8. Focus on desktop Chrome/Safari. Revisit post-launch if client-presentation-on-tablet turns out to be a real requirement.
 
-## Phase 6: Room Preview + Admin + Daily Recheck
+### What to test
 
-The finishing touches that make it production-ready for the team.
+- Place a sofa via click-to-place → snaps to 100cm grid → drag with Ctrl held → moves freely off-grid
+- Switch to a plant (small block) → snaps to 25cm grid
+- Override a coffee table's block size from big → small → grid snap changes accordingly
+- Rotate the sofa 15° at a time with scroll-wheel → snaps feel right, Ctrl gives continuous rotation
+- Place a rug → renders as flat plane on floor, not a distorted `.glb`
+- Toggle roam mode → walk through the room in first-person → back to design mode, state preserved
+- Open a project with 30+ furniture items → maintains interactive framerate
+- Apply a design style template → all furniture places correctly with rotations intact
+- Export construction drawings → floor plan and elevations match the 3D scene dimensions accurately
+- Cost summary, shape edit mode, finish changes, variant swatches, templates all still work
 
-**What to build:**
+### Reference docs to update
 
-- Room perspective preview:
-  - "Preview Room" button on canvas
-  - Client-side Three.js (browser) loads room geometry + finishes + all placed .glb files
-  - Renders eye-level interior vignette (perspective camera at ~160cm height)
-  - Wall selector buttons let user view from any wall (Wall 1, Wall 2, ..., Wall N)
-  - Door/window cutouts with 3D door panels and glass panes
-  - Displays in modal overlay with download + save options
-  - Saves to `rooms.preview_image_url` in Supabase Storage
-- Admin catalog management:
-  - Pending furniture approval queue (approve/reject items submitted by designers)
-  - Shared catalog overview with status filters
-  - Link status overview (active/inactive/unchecked counts)
-- Team management:
-  - Invite new team members (email invite)
-  - Remove team members
-  - Assign/change roles (admin/designer)
-- Daily link validity recheck:
-  - Scheduled Edge Function (3:00 AM Bangkok time)
-  - Batch checks variant source URLs (round-robin, ~100 per run)
-  - Updates `link_status`, `last_checked_at`, `price_thb`, `price_changed`
-  - Admin dashboard surfaces newly flagged items
-- Admin project access: view and manage all projects across team
-- Responsive polish: tablet bottom sheet for right panel, mobile presentation mode
-- Construction drawing export (floor plan + elevations):
-  - "Export Drawings" button in editor toolbar → generates a set of dimensioned orthographic views
-  - **Floor plan** (top-down): room polygon outline, door swings, window positions, all wall lengths in cm, door/window widths, distances between elements
-  - **Elevation drawings** (front, left, right, back): flat wall-face views showing wall heights, door/window positions with height and sill dimensions, ceiling height, finish boundaries
-  - All dimensions labeled in cm with dimension lines (extension lines + arrows)
-  - Rendered client-side on a PixiJS offscreen canvas (or SVG) at print resolution
-  - Export as PDF (multi-page: floor plan + 4 elevations) and/or PNG per view
-  - Includes room name, project name, scale indicator (e.g. 1:50), and date
-  - These are the **construction documents** (CD set / working drawings) that contractors need to execute the interior fit-out accurately
-
-**What to test:**
-- Design a furnished room → click "Preview Room" → select a wall from the buttons → wait 3–10 seconds → see interior vignette from that wall with door/window details visible
-- Log in as admin → see pending furniture queue → approve an item → it appears in all designers' catalogs
-- Invite a new designer by email → they sign up → appear in team list as designer
-- Wait for daily recheck to run → check admin dashboard → see flagged items with inactive links or changed prices
-- Open the app on a tablet → present a project to a (pretend) client using the room preview
-- Click "Export Drawings" → download PDF with floor plan + 4 elevation views, all dimensions in cm, door/window positions labeled, scale indicator shown
-
-**Reference docs:** `product-spec.md` (user stories #11, #19–20, #22–23), `schema.md` (rooms.preview_image_url, furniture_variants link recheck fields), `integration-contracts.md` (room perspective preview, daily link recheck), `design.md` (alert banner styling)
+- `product-spec.md` — update user stories for 3D interaction (story #8 placement, #9 rotation, #10 room rotation → design mode orbit, add roam mode, block sizing)
+- `tech-stack.md` — Three.js primary renderer for canvas (not just sprites/preview). PixiJS removed from dependencies. Mention WebGL 2 requirement.
+- `schema.md` — `placed_furniture` new fields (`x_cm`, `y_cm`, `z_cm`, `rotation_deg`), drop `direction`; `furniture_categories.default_block_size`, `furniture_items.block_size_override`; drop `furniture_sprites` table entirely
+- `state-map.md` — Canvas Store updates for 3D coordinates, rotation_deg, block-size UI state, camera mode
+- `integration-contracts.md` — remove "Three.js Sprite Rendering" section, add "3D Canvas Rendering (Three.js)" section covering scene composition, camera modes, interaction, construction drawing export
+- `design.md` — 3D scene lighting/materials should match the perspective preview aesthetic; block picker UI styling
+- `CLAUDE.md` — Phase 8 completion notes after shipping, including any concurrency gotchas learned
 
 ---
 
 ## Dependency Graph
 
 ```
-Phase 1: Foundation
-  │
-  ├──► Phase 2: Room Builder
-  │       │
-  │       └──────────┐
-  │                  │
-  ├──► Phase 3: Catalog + AI Pipeline
-  │       │          │
-  │       └──────────┤
-  │                  │
-  │           Phase 4: Isometric Canvas
-  │                  │
-  │                  ├──► Phase 5: Templates + Cost
-  │                  │          │
-  │                  └──────────┤
-  │                             │
-  │                      Phase 6: Preview + Admin + Recheck
-  │
-  └──► Phases 2 and 3 can be built in parallel (no dependency on each other)
+V1 (complete)
+   │
+   ▼
+Phase 7: Pipeline Improvements
+   │
+   ▼
+Phase 8: 3D Canvas Rebuild
 ```
 
-**Note:** Phases 2 and 3 are independent — they both depend on Phase 1 but not on each other. If you want variety in your vibe-coding sessions, you can alternate between room builder work and catalog/pipeline work.
+Phase 7 must land first. The 3D canvas displays `.glb` files directly — bad `.glb` output (single-image TRELLIS on messy inputs, attempted rug `.glb`) makes the Sims-style canvas look bad no matter how well-engineered the canvas itself is. Phase 7 also produces testable wins faster and is lower-risk than the canvas rewrite.
 
 ---
 
-## What "Done" Looks Like
+## What "Done" Looks Like (V2)
 
-When all 6 phases are complete, LEANOVATE supports the full workflow:
+All V1 phases + Phase 7 + Phase 8 complete:
 
-1. Designer logs in → creates a project for a condo unit
-2. Configures the unit layout (rooms, dimensions, finishes)
-3. Applies a furniture layout template → category slots appear
-4. Applies a design style → real products auto-fill with sprites
-5. Regenerates until the selection feels right
-6. Manually swaps individual items or colors
-7. Views live cost summary with furniture + renovation totals
-8. Clicks "Preview Room" → sees an eye-level interior vignette
-9. Exports construction drawings (floor plan + elevations with dimensions) for the contractor
-10. Presents the isometric view + vignette + cost summary to the client
-11. Admin manages the catalog, approves new items, monitors link health
+1. Designer uploads 2–4 clean product shots per variant (prepped externally via Nano Banana if source photos are messy) → gets a reliable `.glb` out of TRELLIS
+2. Flat items (rugs, wall art, curtains, bedding, mirrors) skip TRELLIS entirely and use the product photo as the sprite
+3. Designer places furniture in a Sims-style 3D room with big/small block snap-to-grid, Ctrl to bypass
+4. Designer rotates the camera freely in design mode; toggles roam mode for client presentations
+5. Room shapes, finishes, templates, cost summary, and construction drawings all work against the new 3D data model
+6. `furniture_sprites` table and 4-angle sprite PNGs are gone; the pipeline and canvas both use `.glb` natively

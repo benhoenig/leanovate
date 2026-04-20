@@ -1,12 +1,16 @@
 /**
  * generate-3d-model — Supabase Edge Function
  *
- * Generates a 3D model (.glb) from a background-removed product image using
- * TRELLIS via the Replicate API (firtoz/trellis).
+ * Generates a 3D model (.glb) from one or more designer-uploaded product images
+ * using TRELLIS via the Replicate API (firtoz/trellis).
  *
- * Sprite rendering is handled client-side in the browser after this function returns.
+ * TRELLIS does its own background removal — no rembg pre-step. Multi-image
+ * input is the biggest .glb quality lever; designers should upload 2–4 clean
+ * product-page angle shots when available.
  *
- * Called after designer approves a clean image (image_status → approved).
+ * Called immediately after variant creation (no approval gate before TRELLIS).
+ * Post-TRELLIS, the designer reviews the .glb via ModelApprovalModal and sets
+ * render_approval_status.
  *
  * Request body: { variant_id: string }
  *
@@ -24,8 +28,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// TRELLIS model on Replicate — Microsoft's image-to-3D model
-// Check latest version at: https://replicate.com/firtoz/trellis
 const TRELLIS_VERSION = 'e8f6c45206993f297372f5436b90350817bd9b4a0d52d2a76df50c1c8afa2b3c'
 
 serve(async (req) => {
@@ -47,19 +49,18 @@ serve(async (req) => {
     const { variant_id } = await req.json()
     if (!variant_id) return jsonError('variant_id is required', 400)
 
-    // 1. Fetch variant — we need the clean_image_url
+    // 1. Fetch variant — we need original_image_urls
     const { data: variant, error: fetchError } = await supabase
       .from('furniture_variants')
-      .select('id, clean_image_url, image_status, furniture_item_id')
+      .select('id, original_image_urls, furniture_item_id')
       .eq('id', variant_id)
       .single()
 
     if (fetchError || !variant) return jsonError('Variant not found', 404)
-    if (variant.image_status !== 'approved') {
-      return jsonError('Image must be approved before generating 3D model', 400)
-    }
-    if (!variant.clean_image_url) {
-      return jsonError('Variant has no clean image', 400)
+
+    const imageUrls = (variant.original_image_urls as string[] | null) ?? []
+    if (imageUrls.length === 0) {
+      return jsonError('Variant has no uploaded images', 400)
     }
 
     // 2. Mark as processing
@@ -68,45 +69,49 @@ serve(async (req) => {
       .update({ render_status: 'processing' })
       .eq('id', variant_id)
 
-    // 3. Create signed URL for clean image (bucket is private)
-    const cleanBucketPrefix = '/storage/v1/object/public/clean-images/'
-    let accessibleCleanUrl = variant.clean_image_url
-    const cleanPathIdx = variant.clean_image_url.indexOf(cleanBucketPrefix)
-    if (cleanPathIdx !== -1) {
-      const storagePath = variant.clean_image_url.substring(cleanPathIdx + cleanBucketPrefix.length)
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from('clean-images')
-        .createSignedUrl(storagePath, 600)
-      if (signedError || !signedData?.signedUrl) {
-        console.error('Failed to create signed URL:', signedError)
-        await markFailed(supabase, variant_id)
-        return jsonError('Failed to create signed URL for clean image', 500)
+    // 3. Sign each image URL (original-images bucket is private)
+    const bucketPrefix = '/storage/v1/object/public/original-images/'
+    const signedUrls: string[] = []
+    for (const url of imageUrls) {
+      const idx = url.indexOf(bucketPrefix)
+      if (idx === -1) {
+        // URL is already public or external — pass through
+        signedUrls.push(url)
+        continue
       }
-      accessibleCleanUrl = signedData.signedUrl
+      const storagePath = url.substring(idx + bucketPrefix.length)
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('original-images')
+        .createSignedUrl(storagePath, 600)
+      if (signErr || !signed?.signedUrl) {
+        console.error('Sign URL failed:', signErr)
+        await markFailed(supabase, variant_id)
+        return jsonError('Failed to sign image URL', 500)
+      }
+      signedUrls.push(signed.signedUrl)
     }
 
-    // 4. Call TRELLIS via Replicate
-    const prediction = await createReplicatePrediction(replicateToken, accessibleCleanUrl)
+    // 4. Call TRELLIS with all images
+    const prediction = await createReplicatePrediction(replicateToken, signedUrls)
     if (!prediction?.id) {
       await markFailed(supabase, variant_id)
       return jsonError('Failed to start TRELLIS prediction', 500)
     }
 
-    // 4. Poll for completion — TRELLIS takes ~30-60 seconds
+    // 5. Poll for completion — TRELLIS takes ~30-60 seconds
     const outputs = await pollReplicatePrediction(replicateToken, prediction.id, 60)
     if (!outputs) {
       await markFailed(supabase, variant_id)
       return jsonError('TRELLIS timed out or failed', 500)
     }
 
-    // TRELLIS output contains multiple files; we want the .glb
     const glbUrl = findGlbUrl(outputs)
     if (!glbUrl) {
       await markFailed(supabase, variant_id)
       return jsonError('TRELLIS did not return a .glb file', 500)
     }
 
-    // 5. Download the .glb file
+    // 6. Download the .glb
     const glbResp = await fetch(glbUrl)
     if (!glbResp.ok) {
       await markFailed(supabase, variant_id)
@@ -114,7 +119,7 @@ serve(async (req) => {
     }
     const glbBlob = await glbResp.blob()
 
-    // 6. Upload .glb to Supabase Storage (glb-models bucket)
+    // 7. Upload .glb to glb-models bucket
     const glbPath = `${variant_id}/model.glb`
     const { error: uploadError } = await supabase.storage
       .from('glb-models')
@@ -129,7 +134,7 @@ serve(async (req) => {
       return jsonError('Failed to store .glb: ' + uploadError.message, 500)
     }
 
-    // 7. Update variant with glb_path — client will handle sprite rendering
+    // 8. Update variant with glb_path — client will render sprites + show approval modal
     await supabase
       .from('furniture_variants')
       .update({ glb_path: glbPath })
@@ -156,7 +161,7 @@ interface ReplicatePrediction {
 
 async function createReplicatePrediction(
   token: string,
-  imageUrl: string
+  imageUrls: string[]
 ): Promise<ReplicatePrediction | null> {
   const resp = await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST',
@@ -167,7 +172,7 @@ async function createReplicatePrediction(
     body: JSON.stringify({
       version: TRELLIS_VERSION,
       input: {
-        images: [imageUrl],
+        images: imageUrls,
         texture_size: 1024,
         mesh_simplify: 0.95,
         generate_model: true,
@@ -189,7 +194,7 @@ async function pollReplicatePrediction(
   maxAttempts: number
 ): Promise<unknown | null> {
   for (let i = 0; i < maxAttempts; i++) {
-    await sleep(5000) // TRELLIS is slower, poll every 5s
+    await sleep(5000)
 
     const resp = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
       headers: { Authorization: `Token ${token}` },

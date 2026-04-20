@@ -94,11 +94,11 @@ export default function PendingApprovalQueue() {
 
   const statusDot = (status: string) => {
     const colors: Record<string, string> = {
-      processing: 'var(--color-warning)',
-      pending_approval: 'var(--color-warning)',
+      pending: 'var(--color-warning)',
       approved: 'var(--color-success)',
       rejected: 'var(--color-error)',
       waiting: 'var(--color-text-secondary)',
+      processing: 'var(--color-warning)',
       completed: 'var(--color-success)',
       failed: 'var(--color-error)',
     }
@@ -188,14 +188,14 @@ export default function PendingApprovalQueue() {
                     {variants.map((v) => (
                       <div key={v.id} className="pending-variant-row">
                         <img
-                          src={v.clean_image_url || v.original_image_url}
+                          src={v.original_image_urls[0]}
                           alt={v.color_name}
                           className="pending-variant-thumb"
                         />
                         <span className="pending-variant-color">{v.color_name}</span>
                         {v.price_thb != null && <span className="pending-variant-price">฿{v.price_thb.toLocaleString()}</span>}
-                        <span className="pending-variant-status" style={{ color: statusDot(v.image_status) }}>
-                          {v.image_status.replace('_', ' ')}
+                        <span className="pending-variant-status" style={{ color: statusDot(v.render_approval_status) }}>
+                          3D: {v.render_approval_status}
                         </span>
                       </div>
                     ))}

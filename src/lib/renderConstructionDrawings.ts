@@ -9,7 +9,7 @@
  */
 
 import { jsPDF } from 'jspdf'
-import type { Room, RoomVertex, RoomDoor, RoomWindow, RoomGeometry } from '@/types'
+import type { Room, RoomVertex, RoomDoor, RoomWindow, RoomGeometry, PlacedFurniture, FurnitureItem, FurnitureVariant } from '@/types'
 import { getVertices, wallSegmentLength } from '@/lib/roomGeometry'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -17,13 +17,28 @@ import { getVertices, wallSegmentLength } from '@/lib/roomGeometry'
 const DPR = 2 // 2x resolution for print quality
 const LINE_COLOR = '#1a1a1a'
 const DIM_COLOR = '#444444'
+const FURNITURE_LINE = '#333333'
+const FURNITURE_FILL = 'rgba(43, 168, 160, 0.12)' // soft teal
 const THIN_LINE = 1
 const WALL_LINE = 2.5
 const DIM_FONT = '11px Inter, sans-serif'
+const FURNITURE_LABEL_FONT = '10px Inter, sans-serif'
 const TITLE_FONT = 'bold 14px Inter, sans-serif'
 const SUBTITLE_FONT = '12px Inter, sans-serif'
 const DIM_OFFSET = 30 // px offset for dimension lines from wall
 const DIM_TICK = 6 // tick mark length
+
+/**
+ * Per-item data passed to the drawing functions. Each placed piece is
+ * resolved upstream (in the modal) to include its name + dimensions — the
+ * renderer only needs geometry.
+ */
+export interface FurnitureDrawData {
+  placed: PlacedFurniture
+  item: FurnitureItem
+  variant: FurnitureVariant
+  isFlat: boolean
+}
 
 // ── Floor Plan ───────────────────────────────────────────────────────────────
 
@@ -31,6 +46,7 @@ export function renderFloorPlan(
   room: Room,
   projectName: string,
   scale: number, // e.g. 50 means 1:50
+  furniture: FurnitureDrawData[] = [],
 ): HTMLCanvasElement {
   const vertices = getVertices(room)
   const geo = room.geometry as RoomGeometry
@@ -128,6 +144,11 @@ export function renderFloorPlan(
     }
   }
 
+  // Draw furniture footprints (under dimensions so dims stay legible)
+  for (const f of furniture) {
+    drawFurnitureFootprint(ctx, f, pxPerM, toX, toY)
+  }
+
   // Draw dimension lines on all wall segments
   for (let i = 0; i < vertices.length; i++) {
     const a = vertices[i]
@@ -157,6 +178,7 @@ export function renderElevation(
   wallIndex: number,
   projectName: string,
   scale: number,
+  furniture: FurnitureDrawData[] = [],
 ): HTMLCanvasElement {
   const vertices = getVertices(room)
   const geo = room.geometry as RoomGeometry
@@ -255,6 +277,12 @@ export function renderElevation(
     drawVerticalDim(ctx, x + winW + 15, y, y + winH, (win.height_m ?? ceilingH * 0.48) * 100)
   }
 
+  // Draw furniture silhouettes projected onto this wall
+  // (depth-sorted, painter's algorithm: deeper items drawn first)
+  if (furniture.length > 0) {
+    drawFurnitureElevation(ctx, furniture, a, b, wallLen, wallLeft, wallBottom, pxPerM)
+  }
+
   // Overall wall width dimension (top)
   drawHorizontalDim(ctx, wallLeft, wallRight, wallTop - 25, wallLen * 100)
 
@@ -281,6 +309,7 @@ export function renderElevation(
 export async function exportConstructionPDF(
   room: Room,
   projectName: string,
+  furniture: FurnitureDrawData[] = [],
 ): Promise<Blob> {
   const vertices = getVertices(room)
   const numWalls = vertices.length
@@ -298,7 +327,7 @@ export async function exportConstructionPDF(
   else if (maxDim > 8) scale = 100
 
   // Page 1: Floor plan (landscape A4)
-  const floorCanvas = renderFloorPlan(room, projectName, scale)
+  const floorCanvas = renderFloorPlan(room, projectName, scale, furniture)
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
 
   // Fit floor plan canvas to A4 landscape (297 x 210 mm)
@@ -315,7 +344,7 @@ export async function exportConstructionPDF(
   // Pages 2..N: one elevation per wall
   for (let i = 0; i < numWalls; i++) {
     doc.addPage('a4', 'portrait')
-    const elevCanvas = renderElevation(room, i, projectName, scale)
+    const elevCanvas = renderElevation(room, i, projectName, scale, furniture)
     const elAspect = elevCanvas.width / elevCanvas.height
     const elPageW = 170 // 210 - 40 margin
     const elPageH = 257 // 297 - 40 margin
@@ -561,4 +590,164 @@ function drawVerticalDim(
   ctx.rotate(-Math.PI / 2)
   ctx.fillText(label, 0, 0)
   ctx.restore()
+}
+
+// ── Furniture drawing helpers ────────────────────────────────────────────────
+
+/**
+ * Draws a furniture item as a rotated rectangle on the floor plan, with a
+ * short label. Dims are variant-first, item-fallback.
+ */
+function drawFurnitureFootprint(
+  ctx: CanvasRenderingContext2D,
+  f: FurnitureDrawData,
+  pxPerM: number,
+  toX: (u: number) => number,
+  toY: (v: number) => number,
+) {
+  const widthM = (f.variant.width_cm ?? f.item.width_cm ?? 50) / 100
+  const depthM = (f.variant.depth_cm ?? f.item.depth_cm ?? 50) / 100
+  const scale = f.placed.scale_factor ?? 1
+  const wPx = widthM * scale * pxPerM
+  const dPx = depthM * scale * pxPerM
+
+  const cx = toX(f.placed.x_cm / 100)
+  const cy = toY(f.placed.z_cm / 100)
+  const rot = (f.placed.rotation_deg * Math.PI) / 180
+
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.rotate(rot)
+
+  ctx.fillStyle = FURNITURE_FILL
+  ctx.strokeStyle = FURNITURE_LINE
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.rect(-wPx / 2, -dPx / 2, wPx, dPx)
+  ctx.fill()
+  ctx.stroke()
+
+  // Small direction tick on "front" (+X local → right of rectangle)
+  ctx.beginPath()
+  ctx.moveTo(wPx / 2 - 6, 0)
+  ctx.lineTo(wPx / 2, 0)
+  ctx.stroke()
+
+  // Label (only if rectangle has room for text)
+  if (Math.min(wPx, dPx) > 24) {
+    ctx.fillStyle = LINE_COLOR
+    ctx.font = FURNITURE_LABEL_FONT
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    // Draw label un-rotated for readability — un-rotate then re-translate
+    ctx.rotate(-rot)
+    const label = truncateLabel(f.item.name, Math.max(wPx, dPx))
+    ctx.fillText(label, 0, 0)
+  }
+  ctx.restore()
+}
+
+/** Shortens a label to roughly fit within `maxPx` using a heuristic. */
+function truncateLabel(label: string, maxPx: number): string {
+  const maxChars = Math.max(4, Math.floor(maxPx / 6))
+  return label.length <= maxChars ? label : label.slice(0, maxChars - 1) + '…'
+}
+
+/**
+ * Projects each furniture item onto the elevation of wall A→B and draws
+ * their silhouettes. Depth-sorted: items further from the wall are drawn
+ * first so nearer items appear on top (painter's algorithm).
+ *
+ * Coordinate system in wall-local space:
+ *   - X (along wall): distance from A measured along A→B
+ *   - Y (up): height from floor
+ *   - Z (depth): distance into the room, away from the wall (inward normal)
+ *
+ * An item's silhouette width in elevation depends on its rotation. A box at
+ * rotation θ projects onto the wall axis with extent
+ * `|w·cos(θ') + d·sin(θ')|` where θ' = rotation − wallAngle.
+ */
+function drawFurnitureElevation(
+  ctx: CanvasRenderingContext2D,
+  furniture: FurnitureDrawData[],
+  a: RoomVertex,
+  b: RoomVertex,
+  wallLen: number,
+  wallLeft: number,
+  wallBottom: number,
+  pxPerM: number,
+) {
+  const wallDu = b.u - a.u
+  const wallDv = b.v - a.v
+  const wallAngle = Math.atan2(wallDv, wallDu)
+  const cosW = Math.cos(wallAngle)
+  const sinW = Math.sin(wallAngle)
+
+  // Inward normal for CCW polygons: rotate wall dir by -90°
+  const inwardNu = sinW
+  const inwardNv = -cosW
+
+  type Projected = { f: FurnitureDrawData; wallX: number; depthFromWall: number; widthM: number; heightM: number }
+  const projected: Projected[] = []
+
+  for (const f of furniture) {
+    // Skip flat items — barely visible in elevation
+    if (f.isFlat) continue
+
+    const widthM = ((f.variant.width_cm ?? f.item.width_cm ?? 50) / 100) * (f.placed.scale_factor ?? 1)
+    const depthM = ((f.variant.depth_cm ?? f.item.depth_cm ?? 50) / 100) * (f.placed.scale_factor ?? 1)
+    const heightM = ((f.variant.height_cm ?? f.item.height_cm ?? 50) / 100) * (f.placed.scale_factor ?? 1)
+
+    // Item center in room coords (metres)
+    const cxM = f.placed.x_cm / 100
+    const czM = f.placed.z_cm / 100
+
+    // Project center onto wall local axes
+    const relU = cxM - a.u
+    const relV = czM - a.v
+    const wallX = relU * cosW + relV * sinW               // distance along wall from A
+    const depthFromWall = relU * inwardNu + relV * inwardNv // distance inward
+
+    // Skip items behind the wall or outside the wall's slab
+    if (depthFromWall < -0.1) continue
+
+    // Projected half-width = |w cos θ' + d sin θ'| / 2
+    const thetaRel = (f.placed.rotation_deg * Math.PI) / 180 - wallAngle
+    const projHalfW = (Math.abs(widthM * Math.cos(thetaRel)) + Math.abs(depthM * Math.sin(thetaRel))) / 2
+
+    // Skip items whose projection is entirely outside the wall
+    if (wallX + projHalfW < -0.1 || wallX - projHalfW > wallLen + 0.1) continue
+
+    projected.push({ f, wallX, depthFromWall, widthM: projHalfW * 2, heightM })
+  }
+
+  // Depth-sort: further first so closer items paint on top
+  projected.sort((p, q) => q.depthFromWall - p.depthFromWall)
+
+  for (const p of projected) {
+    const centerXPx = wallLeft + p.wallX * pxPerM
+    const heightPx = p.heightM * pxPerM
+    const yFloorPx = (p.f.placed.y_cm / 100) * pxPerM
+    const widthPx = p.widthM * pxPerM
+
+    const x = centerXPx - widthPx / 2
+    const y = wallBottom - yFloorPx - heightPx
+
+    ctx.fillStyle = FURNITURE_FILL
+    ctx.strokeStyle = FURNITURE_LINE
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.rect(x, y, widthPx, heightPx)
+    ctx.fill()
+    ctx.stroke()
+
+    // Label if tall enough
+    if (heightPx > 18 && widthPx > 30) {
+      ctx.fillStyle = LINE_COLOR
+      ctx.font = FURNITURE_LABEL_FONT
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(truncateLabel(p.f.item.name, widthPx), x + widthPx / 2, y + heightPx / 2)
+    }
+  }
 }

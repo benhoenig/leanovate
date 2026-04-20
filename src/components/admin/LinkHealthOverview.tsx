@@ -176,7 +176,7 @@ export default function LinkHealthOverview() {
             {flaggedVariants.map((v) => (
               <div key={v.id} className="flagged-row">
                 <img
-                  src={v.clean_image_url || v.original_image_url}
+                  src={v.original_image_urls[0]}
                   alt={v.color_name}
                   className="flagged-thumb"
                 />

@@ -5,7 +5,7 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { supabase } from '@/lib/supabase'
+import { rawStorageUpload } from '@/lib/supabase'
 import { getVertices } from '@/lib/roomGeometry'
 import type { FurnitureItem } from '@/types'
 
@@ -157,21 +157,18 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
 
     try {
       const path = `${room.id}/preview_${Date.now()}.png`
-      const { error: uploadErr } = await supabase.storage
-        .from('thumbnails')
-        .upload(path, blobRef.current, {
-          contentType: 'image/png',
-          upsert: true,
-        })
+      const { publicUrl, error: uploadErr } = await rawStorageUpload('thumbnails', path, blobRef.current, {
+        contentType: 'image/png',
+        upsert: true,
+      })
 
-      if (uploadErr) {
-        showToast('Failed to save preview: ' + uploadErr.message, 'error')
+      if (uploadErr || !publicUrl) {
+        showToast('Failed to save preview: ' + (uploadErr ?? 'unknown error'), 'error')
         setIsSaving(false)
         return
       }
 
-      const { data } = supabase.storage.from('thumbnails').getPublicUrl(path)
-      await updateRoom(room.id, { preview_image_url: data.publicUrl })
+      await updateRoom(room.id, { preview_image_url: publicUrl })
       showToast('Preview saved to project', 'success')
     } catch (err) {
       showToast('Save failed: ' + String(err), 'error')

@@ -4,9 +4,8 @@ import type {
   FurnitureLayoutTemplate,
   DesignStyleTemplate,
   StalenessAlert,
-  Direction,
 } from '@/types'
-import { supabase } from '@/lib/supabase'
+import { supabase, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -111,21 +110,17 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       sort_order: r.sort_order,
     }))
 
-    const { data, error } = await supabase
-      .from('unit_layout_templates')
-      .insert({
-        name,
-        created_by: profile.id,
-        unit_width_cm: currentProject.unit_width_cm,
-        unit_height_cm: currentProject.unit_height_cm,
-        rooms_data,
-      })
-      .select()
-      .single()
+    const { data, error } = await rawInsert<UnitLayoutTemplate>('unit_layout_templates', {
+      name,
+      created_by: profile.id,
+      unit_width_cm: currentProject.unit_width_cm,
+      unit_height_cm: currentProject.unit_height_cm,
+      rooms_data,
+    })
 
-    if (error) return { id: null, error: error.message }
-    set((s) => ({ unitTemplates: [data as UnitLayoutTemplate, ...s.unitTemplates] }))
-    return { id: (data as UnitLayoutTemplate).id, error: null }
+    if (error || !data) return { id: null, error: error ?? 'Insert failed' }
+    set((s) => ({ unitTemplates: [data, ...s.unitTemplates] }))
+    return { id: data.id, error: null }
   },
 
   saveFurnitureTemplate: async (name) => {
@@ -144,21 +139,21 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       return {
         category_id: item?.category_id ?? '',
         room_name: room?.name ?? '',
-        x: pf.x,
-        y: pf.y,
-        direction: pf.direction,
+        x_cm: pf.x_cm,
+        z_cm: pf.z_cm,
+        rotation_deg: pf.rotation_deg,
       }
     })
 
-    const { data, error } = await supabase
-      .from('furniture_layout_templates')
-      .insert({ name, created_by: profile.id, layout_data })
-      .select()
-      .single()
+    const { data, error } = await rawInsert<FurnitureLayoutTemplate>('furniture_layout_templates', {
+      name,
+      created_by: profile.id,
+      layout_data,
+    })
 
-    if (error) return { id: null, error: error.message }
-    set((s) => ({ furnitureTemplates: [data as FurnitureLayoutTemplate, ...s.furnitureTemplates] }))
-    return { id: (data as FurnitureLayoutTemplate).id, error: null }
+    if (error || !data) return { id: null, error: error ?? 'Insert failed' }
+    set((s) => ({ furnitureTemplates: [data, ...s.furnitureTemplates] }))
+    return { id: data.id, error: null }
   },
 
   saveStyleTemplate: async (name, styleId) => {
@@ -181,22 +176,23 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
         furniture_item_id: pf.furniture_item_id,
         variant_id: pf.selected_variant_id,
         room_name: room?.name ?? '',
-        x: pf.x,
-        y: pf.y,
-        direction: pf.direction,
+        x_cm: pf.x_cm,
+        z_cm: pf.z_cm,
+        rotation_deg: pf.rotation_deg,
         price_at_save: variant?.price_thb ?? null,
       }
     })
 
-    const { data, error } = await supabase
-      .from('design_style_templates')
-      .insert({ name, style_id: styleId, created_by: profile.id, items_data })
-      .select()
-      .single()
+    const { data, error } = await rawInsert<DesignStyleTemplate>('design_style_templates', {
+      name,
+      style_id: styleId,
+      created_by: profile.id,
+      items_data,
+    })
 
-    if (error) return { id: null, error: error.message }
-    set((s) => ({ styleTemplates: [data as DesignStyleTemplate, ...s.styleTemplates] }))
-    return { id: (data as DesignStyleTemplate).id, error: null }
+    if (error || !data) return { id: null, error: error ?? 'Insert failed' }
+    set((s) => ({ styleTemplates: [data, ...s.styleTemplates] }))
+    return { id: data.id, error: null }
   },
 
   // ─── Apply ────────────────────────────────────────────────────────────────
@@ -221,20 +217,18 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
     // Create rooms from template snapshot
     for (const rd of template.rooms_data) {
-      const { error } = await supabase
-        .from('rooms')
-        .insert({
-          project_id: currentProject.id,
-          name: rd.name,
-          x: rd.x,
-          y: rd.y,
-          width_cm: rd.width_cm,
-          height_cm: rd.height_cm,
-          ceiling_height_cm: rd.ceiling_height_cm,
-          geometry: rd.geometry,
-          finishes: rd.finishes,
-          sort_order: rd.sort_order,
-        })
+      const { error } = await rawInsert('rooms', {
+        project_id: currentProject.id,
+        name: rd.name,
+        x: rd.x,
+        y: rd.y,
+        width_cm: rd.width_cm,
+        height_cm: rd.height_cm,
+        ceiling_height_cm: rd.ceiling_height_cm,
+        geometry: rd.geometry,
+        finishes: rd.finishes,
+        sort_order: rd.sort_order,
+      })
       if (error) console.error('applyUnitTemplate room insert:', error)
     }
 
@@ -252,7 +246,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
     if (rooms.length === 0) return { error: 'No rooms in project' }
 
-    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x: number; y: number; direction: Direction }> = []
+    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x_cm: number; z_cm: number; rotation_deg: number }> = []
     const skipped: string[] = []
 
     for (const slot of template.layout_data) {
@@ -281,9 +275,9 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
         roomId: room.id,
         furnitureItemId: item.id,
         variantId: variant.id,
-        x: slot.x,
-        y: slot.y,
-        direction: slot.direction,
+        x_cm: slot.x_cm,
+        z_cm: slot.z_cm,
+        rotation_deg: slot.rotation_deg,
       })
     }
 
@@ -334,7 +328,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
     }
 
     // Place items
-    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x: number; y: number; direction: Direction }> = []
+    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x_cm: number; z_cm: number; rotation_deg: number }> = []
 
     for (const ti of template.items_data) {
       const room = rooms.find((r) => r.name === ti.room_name) ?? rooms[0]
@@ -342,9 +336,9 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
         roomId: room.id,
         furnitureItemId: ti.furniture_item_id,
         variantId: ti.variant_id,
-        x: ti.x,
-        y: ti.y,
-        direction: ti.direction,
+        x_cm: ti.x_cm,
+        z_cm: ti.z_cm,
+        rotation_deg: ti.rotation_deg,
       })
     }
 
@@ -375,14 +369,14 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       return {
         category_id: item?.category_id ?? '',
         room_id: pf.room_id,
-        x: pf.x,
-        y: pf.y,
-        direction: pf.direction,
+        x_cm: pf.x_cm,
+        z_cm: pf.z_cm,
+        rotation_deg: pf.rotation_deg,
       }
     })
 
     // Find items tagged with this style for each category
-    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x: number; y: number; direction: Direction }> = []
+    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x_cm: number; z_cm: number; rotation_deg: number }> = []
 
     for (const slot of slots) {
       const matchingItems = catalogState.items.filter((i) => {
@@ -401,7 +395,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
         const variants = catalogState.getVariantsForItem(pick.id)
         if (variants.length === 0) continue
         const variant = variants[Math.floor(Math.random() * variants.length)]
-        items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x: slot.x, y: slot.y, direction: slot.direction })
+        items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x_cm: slot.x_cm, z_cm: slot.z_cm, rotation_deg: slot.rotation_deg })
         continue
       }
 
@@ -409,7 +403,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       const variants = catalogState.getVariantsForItem(pick.id)
       if (variants.length === 0) continue
       const variant = variants[Math.floor(Math.random() * variants.length)]
-      items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x: slot.x, y: slot.y, direction: slot.direction })
+      items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x_cm: slot.x_cm, z_cm: slot.z_cm, rotation_deg: slot.rotation_deg })
     }
 
     // Clear current furniture and place new picks
@@ -431,10 +425,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       : type === 'furniture' ? 'furniture_layout_templates'
       : 'design_style_templates'
 
-    const { error } = await supabase
-      .from(table)
-      .update({ is_global: true, promoted_by: profile.id })
-      .eq('id', templateId)
+    const { error } = await rawUpdate(table, templateId, { is_global: true, promoted_by: profile.id })
 
     if (error) { console.error('promoteTemplate:', error); return }
 
@@ -465,7 +456,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       : type === 'furniture' ? 'furniture_layout_templates'
       : 'design_style_templates'
 
-    const { error } = await supabase.from(table).delete().eq('id', templateId)
+    const { error } = await rawDelete(table, templateId)
     if (error) { console.error('deleteTemplate:', error); return }
 
     if (type === 'unit') {

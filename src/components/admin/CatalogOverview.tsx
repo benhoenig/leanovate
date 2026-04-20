@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, ImageIcon, Box } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
-import { renderSprites } from '@/lib/renderSprites'
-import type { FurnitureItem, FurnitureCategory, FurnitureVariant, FurnitureSprite, ItemStatus } from '@/types'
+import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
+import { supabase, rawUpdate } from '@/lib/supabase'
+import type { FurnitureItem, FurnitureCategory, FurnitureVariant, ItemStatus } from '@/types'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -54,21 +53,19 @@ export default function CatalogOverview() {
   const [items, setItems] = useState<FurnitureItem[]>([])
   const [categories, setCategories] = useState<FurnitureCategory[]>([])
   const [variantsByItem, setVariantsByItem] = useState<Map<string, FurnitureVariant[]>>(new Map())
-  const [spritesByVariant, setSpritesByVariant] = useState<Map<string, FurnitureSprite[]>>(new Map())
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(true)
-  const [regeneratingBg, setRegeneratingBg] = useState<Set<string>>(new Set())
   const [regeneratingSprites, setRegeneratingSprites] = useState<Set<string>>(new Set())
-  const [confirmAction, setConfirmAction] = useState<{ variantId: string; type: 'bg' | 'sprites' } | null>(null)
+  const [confirmAction, setConfirmAction] = useState<{ variantId: string; type: 'sprites' } | null>(null)
 
   const reloadData = async () => {
-    const [variantsRes, spritesRes] = await Promise.all([
-      supabase.from('furniture_variants').select('*').order('sort_order', { ascending: true }),
-      supabase.from('furniture_sprites').select('*'),
-    ])
+    const variantsRes = await supabase
+      .from('furniture_variants')
+      .select('*')
+      .order('sort_order', { ascending: true })
     if (variantsRes.data) {
       const map = new Map<string, FurnitureVariant[]>()
       for (const v of variantsRes.data as FurnitureVariant[]) {
@@ -78,25 +75,15 @@ export default function CatalogOverview() {
       }
       setVariantsByItem(map)
     }
-    if (spritesRes.data) {
-      const map = new Map<string, FurnitureSprite[]>()
-      for (const s of spritesRes.data as FurnitureSprite[]) {
-        const list = map.get(s.variant_id) ?? []
-        list.push(s)
-        map.set(s.variant_id, list)
-      }
-      setSpritesByVariant(map)
-    }
   }
 
   useEffect(() => {
     const load = async () => {
       setIsLoading(true)
-      const [itemsRes, catsRes, variantsRes, spritesRes] = await Promise.all([
+      const [itemsRes, catsRes, variantsRes] = await Promise.all([
         supabase.from('furniture_items').select('*').order('created_at', { ascending: false }),
         supabase.from('furniture_categories').select('*').order('sort_order', { ascending: true }),
         supabase.from('furniture_variants').select('*').order('sort_order', { ascending: true }),
-        supabase.from('furniture_sprites').select('*'),
       ])
       if (itemsRes.data) setItems(itemsRes.data as FurnitureItem[])
       if (catsRes.data) setCategories(catsRes.data as FurnitureCategory[])
@@ -109,15 +96,6 @@ export default function CatalogOverview() {
         }
         setVariantsByItem(map)
       }
-      if (spritesRes.data) {
-        const map = new Map<string, FurnitureSprite[]>()
-        for (const s of spritesRes.data as FurnitureSprite[]) {
-          const list = map.get(s.variant_id) ?? []
-          list.push(s)
-          map.set(s.variant_id, list)
-        }
-        setSpritesByVariant(map)
-      }
       setIsLoading(false)
     }
     load()
@@ -125,62 +103,34 @@ export default function CatalogOverview() {
 
   const catMap = new Map(categories.map((c) => [c.id, c.name]))
 
-  const [cacheBust, setCacheBust] = useState(Date.now())
-
-  const getSpriteUrl = (path: string) =>
-    supabase.storage.from('sprites').getPublicUrl(path).data.publicUrl + `?t=${cacheBust}`
-
-  const handleRegenerateBg = async (variantId: string) => {
-    setConfirmAction(null)
-    setRegeneratingBg((prev) => new Set(prev).add(variantId))
-    try {
-      // Reset image_status to processing
-      await supabase.from('furniture_variants').update({ image_status: 'processing', clean_image_url: null }).eq('id', variantId)
-      // Call remove-background edge function
-      const { error } = await invokeEdgeFunction('remove-background', { variant_id: variantId })
-      if (error) console.error('[RegenerateBG] Error:', error)
-      await reloadData()
-    } catch (err) {
-      console.error('[RegenerateBG] Unexpected error:', err)
-    }
-    setRegeneratingBg((prev) => { const n = new Set(prev); n.delete(variantId); return n })
-  }
-
+  /** Re-run TRELLIS to regenerate the .glb 3D model for a variant. */
   const handleRegenerateSprites = async (variant: FurnitureVariant) => {
     setConfirmAction(null)
     setRegeneratingSprites((prev) => new Set(prev).add(variant.id))
     try {
-      // Reset render_status to processing
-      await supabase.from('furniture_variants').update({ render_status: 'processing' }).eq('id', variant.id)
-
-      if (variant.glb_path) {
-        // GLB already exists — just re-render sprites from it
-        console.log('[RegenerateSprites] Re-rendering from existing .glb:', variant.glb_path)
-        await renderSprites(variant.id, variant.glb_path)
-      } else if (variant.image_status === 'approved' && variant.clean_image_url) {
-        // No GLB — re-run full TRELLIS → sprites pipeline
-        console.log('[RegenerateSprites] No .glb, running full TRELLIS → sprites pipeline')
-        const { error, data } = await invokeEdgeFunction('generate-3d-model', { variant_id: variant.id })
-        if (error) {
-          console.error('[RegenerateSprites] TRELLIS error:', error)
-          await supabase.from('furniture_variants').update({ render_status: 'failed' }).eq('id', variant.id)
-        } else {
-          const glbPath = data?.glb_path as string | undefined
-          if (glbPath) {
-            await renderSprites(variant.id, glbPath)
-          } else {
-            console.error('[RegenerateSprites] No glb_path in response')
-            await supabase.from('furniture_variants').update({ render_status: 'failed' }).eq('id', variant.id)
-          }
-        }
+      await rawUpdate('furniture_variants', variant.id, {
+        render_status: 'processing',
+        glb_path: null,
+      })
+      const { error, data } = await invokeEdgeFunction('generate-3d-model', { variant_id: variant.id })
+      if (error) {
+        console.error('[RegenerateModel] TRELLIS error:', error)
+        await rawUpdate('furniture_variants', variant.id, { render_status: 'failed' })
       } else {
-        console.error('[RegenerateSprites] Cannot regenerate: image not approved')
-        await supabase.from('furniture_variants').update({ render_status: 'failed' }).eq('id', variant.id)
+        const glbPath = data?.glb_path as string | undefined
+        if (glbPath) {
+          await rawUpdate('furniture_variants', variant.id, {
+            render_status: 'completed',
+            glb_path: glbPath,
+            render_approval_status: 'pending',
+          })
+        } else {
+          await rawUpdate('furniture_variants', variant.id, { render_status: 'failed' })
+        }
       }
       await reloadData()
-      setCacheBust(Date.now()) // Bust CDN cache for sprite URLs
     } catch (err) {
-      console.error('[RegenerateSprites] Unexpected error:', err)
+      console.error('[RegenerateModel] Unexpected error:', err)
     }
     setRegeneratingSprites((prev) => { const n = new Set(prev); n.delete(variant.id); return n })
   }
@@ -271,7 +221,7 @@ export default function CatalogOverview() {
           {filteredItems.map((item) => {
             const variants = variantsByItem.get(item.id) ?? []
             const thumbVariant = variants[0]
-            const thumbUrl = thumbVariant?.clean_image_url || thumbVariant?.original_image_url
+            const thumbUrl = thumbVariant?.original_image_urls?.[0]
             const isExpanded = expandedId === item.id
             return (
               <div key={item.id} className={`catalog-item-card ${isExpanded ? 'expanded' : ''}`}>
@@ -310,7 +260,7 @@ export default function CatalogOverview() {
                       {variants.slice(0, 5).map((v) => (
                         <img
                           key={v.id}
-                          src={v.clean_image_url || v.original_image_url}
+                          src={v.original_image_urls[0]}
                           alt={v.color_name}
                           title={v.color_name}
                           className="catalog-swatch-thumb"
@@ -337,92 +287,55 @@ export default function CatalogOverview() {
                       <p className="catalog-detail-empty">No variants added yet</p>
                     ) : (
                       <div className="catalog-variants-grid">
-                        {variants.map((v) => {
-                          const sprites = spritesByVariant.get(v.id) ?? []
-                          const dirOrder = ['front_left', 'front_right', 'back_left', 'back_right']
-                          const sortedSprites = dirOrder
-                            .map((d) => sprites.find((s) => s.direction === d))
-                            .filter(Boolean) as FurnitureSprite[]
-                          return (
-                            <div key={v.id} className="catalog-variant-section">
-                              <div className="catalog-variant-header">
-                                <span className="catalog-variant-color">{v.color_name}</span>
-                                {v.price_thb != null && (
-                                  <span className="catalog-variant-price">฿{v.price_thb.toLocaleString()}</span>
-                                )}
-                                <span className="catalog-variant-img-status" style={{ color: STATUS_COLORS[v.image_status === 'approved' ? 'approved' : v.image_status === 'rejected' ? 'rejected' : 'pending'] }}>
-                                  {v.image_status.replace('_', ' ')}
-                                </span>
-                                <span className="catalog-variant-render-status" style={{ color: STATUS_COLORS[v.render_status === 'completed' ? 'approved' : v.render_status === 'failed' ? 'rejected' : 'pending'] }}>
-                                  render: {v.render_status}
-                                </span>
-                                <div className="catalog-variant-actions">
-                                  <button
-                                    className="catalog-regen-btn"
-                                    disabled={regeneratingBg.has(v.id)}
-                                    onClick={(e) => { e.stopPropagation(); setConfirmAction({ variantId: v.id, type: 'bg' }) }}
-                                    title="Re-run background removal"
-                                  >
-                                    {regeneratingBg.has(v.id) ? <RefreshCw size={12} className="spinning" /> : <ImageIcon size={12} />}
-                                    Re-run BG
-                                  </button>
-                                  <button
-                                    className="catalog-regen-btn"
-                                    disabled={regeneratingSprites.has(v.id)}
-                                    onClick={(e) => { e.stopPropagation(); setConfirmAction({ variantId: v.id, type: 'sprites' }) }}
-                                    title="Regenerate 3D model and sprites"
-                                  >
-                                    {regeneratingSprites.has(v.id) ? <RefreshCw size={12} className="spinning" /> : <Box size={12} />}
-                                    Regen Sprites
-                                  </button>
-                                </div>
-                              </div>
-                              {confirmAction?.variantId === v.id && (
-                                <div className="catalog-confirm-bar">
-                                  <span className="catalog-confirm-msg">
-                                    {confirmAction.type === 'bg'
-                                      ? 'Re-run background removal? This will replace the current clean image.'
-                                      : v.glb_path
-                                        ? 'Regenerate sprites from existing 3D model? This will replace current sprite images.'
-                                        : 'Regenerate 3D model + sprites? This runs TRELLIS (~1 min) then renders new sprites.'}
-                                  </span>
-                                  <button
-                                    className="catalog-confirm-yes"
-                                    onClick={() => confirmAction.type === 'bg' ? handleRegenerateBg(v.id) : handleRegenerateSprites(v)}
-                                  >
-                                    Confirm
-                                  </button>
-                                  <button className="catalog-confirm-no" onClick={() => setConfirmAction(null)}>Cancel</button>
-                                </div>
+                        {variants.map((v) => (
+                          <div key={v.id} className="catalog-variant-section">
+                            <div className="catalog-variant-header">
+                              <span className="catalog-variant-color">{v.color_name}</span>
+                              {v.price_thb != null && (
+                                <span className="catalog-variant-price">฿{v.price_thb.toLocaleString()}</span>
                               )}
-                              <div className="catalog-variant-images">
-                                <div className="catalog-img-col">
-                                  <span className="catalog-img-label">Original</span>
-                                  <img src={v.original_image_url} alt="Original" className="catalog-detail-img" />
-                                </div>
-                                {v.clean_image_url && (
-                                  <div className="catalog-img-col">
-                                    <span className="catalog-img-label">Clean</span>
-                                    <img src={v.clean_image_url} alt="Clean" className="catalog-detail-img catalog-detail-img-clean" />
-                                  </div>
-                                )}
-                                {sortedSprites.length > 0 && (
-                                  <div className="catalog-img-col catalog-sprites-col">
-                                    <span className="catalog-img-label">3D Sprites</span>
-                                    <div className="catalog-sprites-row">
-                                      {sortedSprites.map((s) => (
-                                        <div key={s.id} className="catalog-sprite-cell">
-                                          <img src={getSpriteUrl(s.image_path)} alt={s.direction} className="catalog-sprite-img" />
-                                          <span className="catalog-sprite-dir">{s.direction.replace('_', ' ')}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
+                              <span className="catalog-variant-render-status" style={{ color: STATUS_COLORS[v.render_status === 'completed' ? 'approved' : v.render_status === 'failed' ? 'rejected' : 'pending'] }}>
+                                render: {v.render_status}
+                              </span>
+                              <span className="catalog-variant-render-status" style={{ color: STATUS_COLORS[v.render_approval_status === 'approved' ? 'approved' : v.render_approval_status === 'rejected' ? 'rejected' : 'pending'] }}>
+                                approval: {v.render_approval_status}
+                              </span>
+                              <div className="catalog-variant-actions">
+                                <button
+                                  className="catalog-regen-btn"
+                                  disabled={regeneratingSprites.has(v.id)}
+                                  onClick={(e) => { e.stopPropagation(); setConfirmAction({ variantId: v.id, type: 'sprites' }) }}
+                                  title="Regenerate 3D model"
+                                >
+                                  {regeneratingSprites.has(v.id) ? <RefreshCw size={12} className="spinning" /> : <Box size={12} />}
+                                  Regen 3D
+                                </button>
                               </div>
                             </div>
-                          )
-                        })}
+                            {confirmAction?.variantId === v.id && (
+                              <div className="catalog-confirm-bar">
+                                <span className="catalog-confirm-msg">
+                                  Regenerate 3D model? This re-runs TRELLIS (~1 min) and resets approval to pending.
+                                </span>
+                                <button
+                                  className="catalog-confirm-yes"
+                                  onClick={() => handleRegenerateSprites(v)}
+                                >
+                                  Confirm
+                                </button>
+                                <button className="catalog-confirm-no" onClick={() => setConfirmAction(null)}>Cancel</button>
+                              </div>
+                            )}
+                            <div className="catalog-variant-images">
+                              {v.original_image_urls.map((url, i) => (
+                                <div key={i} className="catalog-img-col">
+                                  <span className="catalog-img-label">Source {i + 1}</span>
+                                  <img src={url} alt={`Source ${i + 1}`} className="catalog-detail-img" />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

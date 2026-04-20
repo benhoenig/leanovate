@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { X, Download, Loader2, AlertTriangle } from 'lucide-react'
-import { renderFloorPlan, renderElevation, exportConstructionPDF } from '@/lib/renderConstructionDrawings'
+import { renderFloorPlan, renderElevation, exportConstructionPDF, type FurnitureDrawData } from '@/lib/renderConstructionDrawings'
 import { useProjectStore } from '@/stores/useProjectStore'
+import { useCanvasStore } from '@/stores/useCanvasStore'
+import { useCatalogStore } from '@/stores/useCatalogStore'
 import { getVertices } from '@/lib/roomGeometry'
 
 export default function ConstructionDrawingModal({ onClose }: { onClose: () => void }) {
@@ -15,6 +17,24 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
   const { rooms, selectedRoomId, currentProject } = useProjectStore()
   const room = rooms.find((r) => r.id === selectedRoomId) ?? null
   const projectName = currentProject?.name ?? 'Project'
+
+  /** Resolve placed furniture for this room + attach variant/item refs for drawing. */
+  const collectFurniture = (): FurnitureDrawData[] => {
+    if (!room) return []
+    const canvas = useCanvasStore.getState()
+    const catalog = useCatalogStore.getState()
+    const data: FurnitureDrawData[] = []
+    for (const pf of canvas.placedFurniture) {
+      if (pf.room_id !== room.id) continue
+      const item = catalog.items.find((i) => i.id === pf.furniture_item_id)
+      const variants = catalog.variants[pf.furniture_item_id] ?? []
+      const variant = variants.find((v) => v.id === pf.selected_variant_id)
+      if (!item || !variant) continue
+      data.push({ placed: pf, item, variant, isFlat: catalog.isItemFlat(item.id) })
+    }
+    return data
+  }
+  const furnitureRef = useRef<FurnitureDrawData[]>([])
 
   useEffect(() => {
     if (!room) {
@@ -38,8 +58,12 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
       if (maxDim < 3) scale = 25
       else if (maxDim > 8) scale = 100
 
+      // Resolve furniture once so both render passes + PDF export use the same set
+      const furniture = collectFurniture()
+      furnitureRef.current = furniture
+
       // Render floor plan
-      const fpCanvas = renderFloorPlan(room, projectName, scale)
+      const fpCanvas = renderFloorPlan(room, projectName, scale, furniture)
       const fpUrl = fpCanvas.toDataURL('image/png')
       setFloorPlanUrl(fpUrl)
       urlsRef.current = [fpUrl]
@@ -47,7 +71,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
       // Render elevations
       const elUrls: string[] = []
       for (let i = 0; i < numWalls; i++) {
-        const elCanvas = renderElevation(room, i, projectName, scale)
+        const elCanvas = renderElevation(room, i, projectName, scale, furniture)
         const url = elCanvas.toDataURL('image/png')
         elUrls.push(url)
       }
@@ -66,7 +90,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
     if (!room) return
     setIsExporting(true)
     try {
-      const blob = await exportConstructionPDF(room, projectName)
+      const blob = await exportConstructionPDF(room, projectName, furnitureRef.current)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url

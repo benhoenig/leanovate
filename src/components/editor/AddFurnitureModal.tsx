@@ -19,15 +19,22 @@ interface ExtractedData {
 }
 
 // ── Variant form state ────────────────────────────────────────────────────────
+
+interface ImageDraft {
+  id: string                  // local draft id for list keys
+  file: File
+  previewUrl: string
+}
+
 interface VariantDraft {
   id: string // local draft id
   color_name: string
   price_thb: string
   source_url: string
-  file: File | null
-  previewUrl: string | null
+  images: ImageDraft[]        // 1+ images; order matters — first is the primary/fallback
   uploading: boolean
-  uploadedUrl: string | null
+  uploadedCount: number       // how many images finished uploading (UI progress)
+  done: boolean               // true once variant row was created
   error: string | null
 }
 
@@ -37,18 +44,26 @@ function newVariantDraft(): VariantDraft {
     color_name: '',
     price_thb: '',
     source_url: '',
-    file: null,
-    previewUrl: null,
+    images: [],
     uploading: false,
-    uploadedUrl: null,
+    uploadedCount: 0,
+    done: false,
     error: null,
+  }
+}
+
+function newImageDraft(file: File): ImageDraft {
+  return {
+    id: crypto.randomUUID(),
+    file,
+    previewUrl: URL.createObjectURL(file),
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function AddFurnitureModal({ onClose }: Props) {
-  const { categories, styles, createItem, createVariant, triggerBackgroundRemoval, loadVariantsForItem, loadCategories, loadStyles } = useCatalogStore()
+  const { categories, styles, createItem, createVariant, loadCategories, loadStyles } = useCatalogStore()
 
   // Ensure categories and styles are loaded (in case modal opens before CatalogPanel mounts)
   useEffect(() => {
@@ -83,6 +98,15 @@ export default function AddFurnitureModal({ onClose }: Props) {
   const [variants, setVariants] = useState<VariantDraft[]>([newVariantDraft()])
   const [isSavingVariants, setIsSavingVariants] = useState(false)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+
+  // Revoke object URLs when drafts are removed/replaced
+  useEffect(() => {
+    return () => {
+      for (const v of variants) {
+        for (const img of v.images) URL.revokeObjectURL(img.previewUrl)
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Step 1: Screenshot extraction ──────────────────────────────────────────
 
@@ -186,7 +210,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
         if (result.price_thb != null) {
           setVariants((prev) => {
             const updated = [...prev]
-            updated[0] = { ...updated[0], price_thb: String(result.price_thb) }
+            updated[0] = { ...updated[0], price_thb: String(result.price_thb ?? '') }
             return updated
           })
         }
@@ -240,65 +264,112 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
   // ─── Step 2: Variants ───────────────────────────────────────────────────────
 
-  const handleVariantImageSelect = useCallback((draftId: string, file: File) => {
-    const previewUrl = URL.createObjectURL(file)
+  const handleVariantImagesAdd = useCallback((draftId: string, files: FileList) => {
+    const newImages: ImageDraft[] = []
+    for (const f of Array.from(files)) {
+      if (f.type.startsWith('image/')) newImages.push(newImageDraft(f))
+    }
+    if (newImages.length === 0) return
     setVariants((prev) =>
-      prev.map((v) => (v.id === draftId ? { ...v, file, previewUrl, uploadedUrl: null, error: null } : v))
+      prev.map((v) =>
+        v.id === draftId
+          ? { ...v, images: [...v.images, ...newImages], error: null }
+          : v
+      )
     )
   }, [])
+
+  const handleVariantImageRemove = (draftId: string, imageId: string) => {
+    setVariants((prev) =>
+      prev.map((v) => {
+        if (v.id !== draftId) return v
+        const removed = v.images.find((img) => img.id === imageId)
+        if (removed) URL.revokeObjectURL(removed.previewUrl)
+        return { ...v, images: v.images.filter((img) => img.id !== imageId) }
+      })
+    )
+  }
+
+  const handleVariantImageReorder = (draftId: string, imageId: string, dir: 'left' | 'right') => {
+    setVariants((prev) =>
+      prev.map((v) => {
+        if (v.id !== draftId) return v
+        const idx = v.images.findIndex((img) => img.id === imageId)
+        if (idx === -1) return v
+        const target = dir === 'left' ? idx - 1 : idx + 1
+        if (target < 0 || target >= v.images.length) return v
+        const images = [...v.images]
+        ;[images[idx], images[target]] = [images[target], images[idx]]
+        return { ...v, images }
+      })
+    )
+  }
 
   const handleAddVariant = () => {
     setVariants((prev) => [...prev, newVariantDraft()])
   }
 
   const handleRemoveVariant = (draftId: string) => {
-    setVariants((prev) => prev.filter((v) => v.id !== draftId))
+    setVariants((prev) => {
+      const target = prev.find((v) => v.id === draftId)
+      if (target) for (const img of target.images) URL.revokeObjectURL(img.previewUrl)
+      return prev.filter((v) => v.id !== draftId)
+    })
   }
 
   const handleSaveVariants = async () => {
     if (!createdItemId) return
-    const validVariants = variants.filter((v) => v.color_name.trim() && v.file)
+    const validVariants = variants.filter((v) => v.color_name.trim() && v.images.length > 0)
     if (validVariants.length === 0) {
       showToast('Add at least one color variant with an image', 'warning')
       return
     }
 
     setIsSavingVariants(true)
-    const createdVariantIds: string[] = []
     try {
       for (let i = 0; i < validVariants.length; i++) {
         const draft = validVariants[i]
 
-        // Mark as uploading
         setVariants((prev) =>
-          prev.map((v) => (v.id === draft.id ? { ...v, uploading: true } : v))
+          prev.map((v) => (v.id === draft.id ? { ...v, uploading: true, uploadedCount: 0 } : v))
         )
 
-        // Upload image
-        console.log(`[SaveVariants] Uploading image for variant ${i + 1}…`)
-        const { url: imageUrl, error: uploadError } = await useCatalogStore.getState().uploadVariantImage(
-          `${createdItemId}_${draft.id}`,
-          draft.file!
-        )
-        console.log(`[SaveVariants] Upload result:`, { imageUrl: !!imageUrl, uploadError })
-        if (uploadError || !imageUrl) {
+        // Upload all images for this variant (sequential — avoids Supabase rate limits on shared anon token)
+        const imageUrls: string[] = []
+        let uploadError: string | null = null
+        for (let j = 0; j < draft.images.length; j++) {
+          const img = draft.images[j]
+          const { url: imageUrl, error } = await useCatalogStore.getState().uploadVariantImage(
+            `${createdItemId}_${draft.id}`,
+            img.file
+          )
+          if (error || !imageUrl) {
+            uploadError = error ?? 'Upload failed'
+            break
+          }
+          imageUrls.push(imageUrl)
           setVariants((prev) =>
-            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: uploadError ?? 'Upload failed' } : v))
+            prev.map((v) => (v.id === draft.id ? { ...v, uploadedCount: j + 1 } : v))
+          )
+        }
+
+        if (uploadError) {
+          setVariants((prev) =>
+            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: uploadError } : v))
           )
           continue
         }
 
-        // Create variant row
-        console.log(`[SaveVariants] Creating variant row…`)
+        // Create variant row — this also kicks off the TRELLIS pipeline
+        // (unless the item is flat, in which case the catalog store skips it).
         const { id: variantId, error: createError } = await createVariant({
           furniture_item_id: createdItemId,
           color_name: draft.color_name.trim(),
-          original_image_url: imageUrl,
+          original_image_urls: imageUrls,
           price_thb: draft.price_thb ? Number(draft.price_thb) : undefined,
           source_url: draft.source_url.trim() || undefined,
           sort_order: i,
         })
-        console.log(`[SaveVariants] Variant created:`, { variantId, createError })
 
         if (createError || !variantId) {
           setVariants((prev) =>
@@ -307,23 +378,19 @@ export default function AddFurnitureModal({ onClose }: Props) {
           continue
         }
 
-        createdVariantIds.push(variantId)
         setVariants((prev) =>
-          prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, uploadedUrl: imageUrl } : v))
+          prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, done: true } : v))
         )
       }
 
-      // 1. Load variants first (no concurrent ops)
-      console.log('[SaveVariants] Loading variants…')
-      await loadVariantsForItem(createdItemId)
-      console.log('[SaveVariants] Variants loaded, closing modal')
-      showToast('Furniture added! Background removal running…', 'success')
+      const isFlat = useCatalogStore.getState().isItemFlat(createdItemId)
+      showToast(
+        isFlat
+          ? 'Flat item added — ready to place on canvas.'
+          : 'Furniture added! Generating 3D models…',
+        'success'
+      )
       onClose()
-
-      // 2. THEN trigger background removal (after modal closed, no concurrency)
-      for (const vid of createdVariantIds) {
-        triggerBackgroundRemoval(vid).catch(console.warn)
-      }
     } catch (err) {
       console.error('[SaveVariants] Unexpected error:', err)
       showToast('Something went wrong: ' + String(err), 'error')
@@ -522,7 +589,9 @@ export default function AddFurnitureModal({ onClose }: Props) {
         {step === 2 && (
           <div className="modal-body">
             <p className="step2-hint">
-              Add one or more color variants. Each variant gets its own image, and will go through background removal automatically.
+              Add one or more color variants. For each variant, upload 2–4 clean product shots from different angles — this
+              is the biggest quality lever for 3D generation. The first image is used as the placeholder until the 3D
+              model is ready.
             </p>
 
             <div className="variants-list">
@@ -537,91 +606,121 @@ export default function AddFurnitureModal({ onClose }: Props) {
                     )}
                   </div>
 
-                  <div className="variant-fields">
-                    {/* Image upload */}
-                    <div className="variant-image-slot">
-                      <input
-                        ref={(el) => { fileInputRefs.current[draft.id] = el }}
-                        type="file"
-                        accept="image/*"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) handleVariantImageSelect(draft.id, file)
-                          e.target.value = ''
-                        }}
-                      />
-                      {draft.previewUrl ? (
-                        <div
-                          className="variant-image-preview"
-                          onClick={() => fileInputRefs.current[draft.id]?.click()}
-                        >
-                          <img src={draft.previewUrl} alt="variant" />
-                          {draft.uploading && (
-                            <div className="variant-image-overlay">
-                              <Loader2 size={16} className="spin" />
-                            </div>
-                          )}
-                          {draft.uploadedUrl && (
+                  {/* Images row */}
+                  <div className="field-group">
+                    <label className="field-label">Product Images ({draft.images.length})</label>
+                    <input
+                      ref={(el) => { fileInputRefs.current[draft.id] = el }}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleVariantImagesAdd(draft.id, e.target.files)
+                        }
+                        e.target.value = ''
+                      }}
+                    />
+                    <div className="variant-images-row">
+                      {draft.images.map((img, imgIdx) => (
+                        <div key={img.id} className="variant-image-thumb">
+                          <img src={img.previewUrl} alt={`img ${imgIdx + 1}`} />
+                          {imgIdx === 0 && <span className="variant-image-primary">1st</span>}
+                          <div className="variant-image-thumb-actions">
+                            {imgIdx > 0 && (
+                              <button
+                                className="variant-image-reorder-btn"
+                                title="Move left"
+                                onClick={() => handleVariantImageReorder(draft.id, img.id, 'left')}
+                              >
+                                ◀
+                              </button>
+                            )}
+                            {imgIdx < draft.images.length - 1 && (
+                              <button
+                                className="variant-image-reorder-btn"
+                                title="Move right"
+                                onClick={() => handleVariantImageReorder(draft.id, img.id, 'right')}
+                              >
+                                ▶
+                              </button>
+                            )}
+                            <button
+                              className="variant-image-remove-btn"
+                              title="Remove"
+                              onClick={() => handleVariantImageRemove(draft.id, img.id)}
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
+                          {draft.uploading && imgIdx < draft.uploadedCount && (
                             <div className="variant-image-overlay success-overlay">✓</div>
                           )}
+                          {draft.uploading && imgIdx === draft.uploadedCount && (
+                            <div className="variant-image-overlay">
+                              <Loader2 size={14} className="spin" />
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <button
-                          className="variant-image-upload-btn"
-                          onClick={() => fileInputRefs.current[draft.id]?.click()}
-                        >
-                          <Upload size={18} />
-                          <span>Upload image</span>
-                          <span className="variant-image-hint">Crop to product only</span>
-                        </button>
-                      )}
+                      ))}
+                      <button
+                        className="variant-image-add-btn"
+                        onClick={() => fileInputRefs.current[draft.id]?.click()}
+                        disabled={draft.uploading}
+                      >
+                        <Upload size={16} />
+                        <span>Add images</span>
+                      </button>
                     </div>
+                    {draft.images.length === 0 && (
+                      <span className="field-hint">
+                        Upload clean product shots (front, 3/4 angle, side) for best results.
+                      </span>
+                    )}
+                  </div>
 
-                    {/* Text fields */}
-                    <div className="variant-text-fields">
-                      <div className="field-group">
-                        <label className="field-label">Color Name *</label>
-                        <input
-                          className="field-input"
-                          placeholder="e.g. Navy Blue, Oak Natural…"
-                          value={draft.color_name}
-                          onChange={(e) =>
-                            setVariants((prev) =>
-                              prev.map((v) => (v.id === draft.id ? { ...v, color_name: e.target.value } : v))
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="field-row-2">
-                        <div className="field-group">
-                          <label className="field-label">Price (฿)</label>
-                          <input
-                            className="field-input"
-                            type="number"
-                            placeholder="Optional"
-                            value={draft.price_thb}
-                            onChange={(e) =>
-                              setVariants((prev) =>
-                                prev.map((v) => (v.id === draft.id ? { ...v, price_thb: e.target.value } : v))
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="field-group">
-                          <label className="field-label">Variant Link</label>
-                          <input
-                            className="field-input"
-                            placeholder="Optional"
-                            value={draft.source_url}
-                            onChange={(e) =>
-                              setVariants((prev) =>
-                                prev.map((v) => (v.id === draft.id ? { ...v, source_url: e.target.value } : v))
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
+                  {/* Text fields */}
+                  <div className="field-group">
+                    <label className="field-label">Color Name *</label>
+                    <input
+                      className="field-input"
+                      placeholder="e.g. Navy Blue, Oak Natural…"
+                      value={draft.color_name}
+                      onChange={(e) =>
+                        setVariants((prev) =>
+                          prev.map((v) => (v.id === draft.id ? { ...v, color_name: e.target.value } : v))
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="field-row-2">
+                    <div className="field-group">
+                      <label className="field-label">Price (฿)</label>
+                      <input
+                        className="field-input"
+                        type="number"
+                        placeholder="Optional"
+                        value={draft.price_thb}
+                        onChange={(e) =>
+                          setVariants((prev) =>
+                            prev.map((v) => (v.id === draft.id ? { ...v, price_thb: e.target.value } : v))
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-group">
+                      <label className="field-label">Variant Link</label>
+                      <input
+                        className="field-input"
+                        placeholder="Optional"
+                        value={draft.source_url}
+                        onChange={(e) =>
+                          setVariants((prev) =>
+                            prev.map((v) => (v.id === draft.id ? { ...v, source_url: e.target.value } : v))
+                          )
+                        }
+                      />
                     </div>
                   </div>
 
@@ -640,7 +739,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
               <button
                 className="btn-primary"
                 onClick={handleSaveVariants}
-                disabled={isSavingVariants || variants.every((v) => !v.color_name.trim() || !v.file)}
+                disabled={isSavingVariants || variants.every((v) => !v.color_name.trim() || v.images.length === 0)}
               >
                 {isSavingVariants ? <Loader2 size={13} className="spin" /> : null}
                 Save Variants
@@ -971,6 +1070,97 @@ export default function AddFurnitureModal({ onClose }: Props) {
         .variant-fields {
           display: flex;
           gap: 12px;
+        }
+        .variant-images-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .variant-image-thumb {
+          position: relative;
+          width: 72px;
+          height: 72px;
+          border-radius: 8px;
+          overflow: hidden;
+          background: var(--color-hover-bg);
+          border: 1px solid var(--color-border-custom);
+        }
+        .variant-image-thumb img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+        .variant-image-primary {
+          position: absolute;
+          top: 3px;
+          left: 3px;
+          background: var(--color-primary-brand);
+          color: white;
+          font-size: 8px;
+          font-weight: 700;
+          padding: 1px 5px;
+          border-radius: 3px;
+          letter-spacing: 0.3px;
+        }
+        .variant-image-thumb-actions {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          padding: 2px;
+          background: rgba(0,0,0,0.55);
+          opacity: 0;
+          transition: opacity 0.15s;
+        }
+        .variant-image-thumb:hover .variant-image-thumb-actions {
+          opacity: 1;
+        }
+        .variant-image-reorder-btn,
+        .variant-image-remove-btn {
+          background: rgba(255,255,255,0.9);
+          border: none;
+          border-radius: 3px;
+          font-size: 9px;
+          color: var(--color-text-primary);
+          cursor: pointer;
+          padding: 2px 5px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: inherit;
+        }
+        .variant-image-remove-btn:hover {
+          background: var(--color-error);
+          color: white;
+        }
+        .variant-image-add-btn {
+          width: 72px;
+          height: 72px;
+          border-radius: 8px;
+          border: 1.5px dashed var(--color-primary-brand);
+          background: var(--color-primary-brand-light);
+          color: var(--color-primary-brand);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 3px;
+          cursor: pointer;
+          font-family: inherit;
+          font-size: 9px;
+          font-weight: 600;
+          transition: all 0.15s;
+        }
+        .variant-image-add-btn:hover:not(:disabled) {
+          background: rgba(43, 168, 160, 0.12);
+        }
+        .variant-image-add-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
         .variant-image-slot {
           width: 90px;

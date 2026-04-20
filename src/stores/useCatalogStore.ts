@@ -2,35 +2,20 @@ import { create } from 'zustand'
 import type {
   FurnitureItem,
   FurnitureVariant,
-  FurnitureSprite,
   FurnitureCategory,
   Style,
   ItemStatus,
-  ImageStatus,
+  RenderStatus,
+  RenderApprovalStatus,
 } from '@/types'
-import { supabase } from '@/lib/supabase'
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { renderSprites } from '@/lib/renderSprites'
 
 // ── Raw fetch helper for edge functions ─────────────────────────────────────
-// Completely bypasses the Supabase JS client to avoid concurrency hangs.
-// Gets the auth token from useAuthStore (already in memory) instead of
-// calling supabase.auth.getSession() which would touch the client.
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+// Bypasses the Supabase JS client to avoid concurrency hangs (see CLAUDE.md #8)
 
 function invokeEdgeFunction(name: string, body: Record<string, unknown>): Promise<{ error: string | null; data?: Record<string, unknown> }> {
-  // Read token from localStorage directly — zero Supabase client interaction
-  let token = SUPABASE_ANON_KEY
-  try {
-    const storageKey = `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`
-    const raw = localStorage.getItem(storageKey)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (parsed?.access_token) token = parsed.access_token
-    }
-  } catch { /* fall back to anon key */ }
-
+  const token = getAuthToken()
   return fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
     method: 'POST',
     headers: {
@@ -70,12 +55,13 @@ export interface CreateItemInput {
   width_cm?: number
   depth_cm?: number
   height_cm?: number
+  is_flat_override?: boolean | null
 }
 
 export interface CreateVariantInput {
   furniture_item_id: string
   color_name: string
-  original_image_url: string
+  original_image_urls: string[]
   price_thb?: number
   source_url?: string
   width_cm?: number
@@ -91,8 +77,6 @@ interface CatalogState {
   items: FurnitureItem[]
   /** variants keyed by furniture_item_id */
   variants: Record<string, FurnitureVariant[]>
-  /** sprites keyed by variant_id */
-  sprites: Record<string, FurnitureSprite[]>
   categories: FurnitureCategory[]
   styles: Style[]
   /** style_ids keyed by furniture_item_id */
@@ -111,31 +95,38 @@ interface CatalogState {
   loadStyles: () => Promise<void>
   loadItems: (filter?: { status?: ItemStatus }) => Promise<void>
   loadVariantsForItem: (itemId: string) => Promise<void>
-  loadSpritesForVariant: (variantId: string) => Promise<void>
   loadItemStyles: (itemId: string) => Promise<void>
 
   // ─ Item CRUD ─────────────────────────────────────────────────────────────
   createItem: (data: CreateItemInput) => Promise<{ id: string | null; error: string | null }>
   updateItem: (
     id: string,
-    updates: Partial<Pick<FurnitureItem, 'name' | 'description' | 'category_id' | 'width_cm' | 'depth_cm' | 'height_cm' | 'source_url'>>
+    updates: Partial<Pick<FurnitureItem, 'name' | 'description' | 'category_id' | 'width_cm' | 'depth_cm' | 'height_cm' | 'source_url' | 'is_flat_override' | 'block_size_override'>>
   ) => Promise<void>
   setItemStyles: (itemId: string, styleIds: string[]) => Promise<void>
 
   // ─ Variant CRUD ──────────────────────────────────────────────────────────
+  /**
+   * Creates a variant row AND kicks off the pipeline:
+   *   - If parent item/category is flat → skip TRELLIS, mark render_status=completed
+   *   - Otherwise → invoke generate-3d-model, then render sprites client-side.
+   *     render_approval_status stays 'pending' until designer reviews the .glb.
+   */
   createVariant: (data: CreateVariantInput) => Promise<{ id: string | null; error: string | null }>
   updateVariant: (
     id: string,
-    updates: Partial<Pick<FurnitureVariant, 'color_name' | 'price_thb' | 'source_url' | 'width_cm' | 'depth_cm' | 'height_cm' | 'image_status' | 'render_status' | 'clean_image_url' | 'glb_path'>>
+    updates: Partial<Pick<FurnitureVariant, 'color_name' | 'price_thb' | 'source_url' | 'width_cm' | 'depth_cm' | 'height_cm' | 'render_status' | 'render_approval_status' | 'glb_path' | 'original_image_urls'>>
   ) => Promise<void>
-  /** Upload variant image file to Supabase Storage, returns public URL */
-  uploadVariantImage: (variantId: string, file: File) => Promise<{ url: string | null; error: string | null }>
-  /** Re-run background removal for a variant (after rejection) */
-  triggerBackgroundRemoval: (variantId: string) => Promise<{ error: string | null }>
+  /** Upload one image file to the original-images bucket. Returns the public URL. */
+  uploadVariantImage: (storagePrefix: string, file: File) => Promise<{ url: string | null; error: string | null }>
 
-  // ─ AI pipeline status transitions ────────────────────────────────────────
-  approveImage: (variantId: string) => Promise<{ error: string | null }>
-  rejectImage: (variantId: string) => Promise<void>
+  // ─ Post-TRELLIS approval flow ────────────────────────────────────────────
+  /** Designer approves the generated .glb — item is now usable without the "pending" badge. */
+  approveRender: (variantId: string) => Promise<{ error: string | null }>
+  /** Designer rejects the generated .glb — they can re-upload images and retry. */
+  rejectRender: (variantId: string) => Promise<{ error: string | null }>
+  /** Re-run TRELLIS for an existing variant (e.g. after re-upload). */
+  retryRender: (variantId: string) => Promise<{ error: string | null }>
 
   // ─ Catalog approval flow ─────────────────────────────────────────────────
   submitItemForReview: (itemId: string) => Promise<void>
@@ -149,8 +140,10 @@ interface CatalogState {
   // ─ Derived selectors ─────────────────────────────────────────────────────
   getFilteredItems: () => FurnitureItem[]
   getVariantsForItem: (itemId: string) => FurnitureVariant[]
-  getSpritesForVariant: (variantId: string) => FurnitureSprite[]
-  getPendingApprovalVariants: () => Array<{ item: FurnitureItem; variant: FurnitureVariant }>
+  /** Variants with a .glb that are awaiting designer approval (render_approval_status='pending' + glb_path not null) */
+  getPendingRenderApprovalVariants: () => Array<{ item: FurnitureItem; variant: FurnitureVariant }>
+  /** Is the effective flat bypass active for an item? (category.is_flat unless overridden) */
+  isItemFlat: (itemId: string) => boolean
 }
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -158,7 +151,6 @@ interface CatalogState {
 export const useCatalogStore = create<CatalogState>((set, get) => ({
   items: [],
   variants: {},
-  sprites: {},
   categories: [],
   styles: [],
   itemStyles: {},
@@ -232,17 +224,6 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     }
   },
 
-  loadSpritesForVariant: async (variantId) => {
-    const { data, error } = await supabase
-      .from('furniture_sprites')
-      .select('*')
-      .eq('variant_id', variantId)
-    if (error) { console.error('loadSpritesForVariant:', error); return }
-    set((state) => ({
-      sprites: { ...state.sprites, [variantId]: data as FurnitureSprite[] },
-    }))
-  },
-
   loadItemStyles: async (itemId) => {
     const { data, error } = await supabase
       .from('furniture_item_styles')
@@ -266,35 +247,31 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       return { id: null, error: 'Not authenticated. Please refresh and try again.' }
     }
 
-    const { data: row, error } = await supabase
-      .from('furniture_items')
-      .insert({
-        name: data.name,
-        category_id: data.category_id,
-        source_url: data.source_url || 'manual',
-        source_domain: data.source_domain || 'manual',
-        description: data.description ?? null,
-        width_cm: data.width_cm ?? null,
-        depth_cm: data.depth_cm ?? null,
-        height_cm: data.height_cm ?? null,
-        status: 'draft',
-        submitted_by: profile.id,
-      })
-      .select()
-      .single()
+    const { data: row, error } = await rawInsert<FurnitureItem>('furniture_items', {
+      name: data.name,
+      category_id: data.category_id,
+      source_url: data.source_url || 'manual',
+      source_domain: data.source_domain || 'manual',
+      description: data.description ?? null,
+      width_cm: data.width_cm ?? null,
+      depth_cm: data.depth_cm ?? null,
+      height_cm: data.height_cm ?? null,
+      is_flat_override: data.is_flat_override ?? null,
+      status: 'draft',
+      submitted_by: profile.id,
+    })
 
-    if (error) {
+    if (error || !row) {
       console.error('createItem insert error:', error)
-      return { id: null, error: error.message }
+      return { id: null, error: error ?? 'Insert returned no data' }
     }
 
-    const newItem = row as FurnitureItem
-    set((state) => ({ items: [newItem, ...state.items] }))
-    return { id: newItem.id, error: null }
+    set((state) => ({ items: [row, ...state.items] }))
+    return { id: row.id, error: null }
   },
 
   updateItem: async (id, updates) => {
-    const { error } = await supabase.from('furniture_items').update(updates).eq('id', id)
+    const { error } = await rawUpdate('furniture_items', id, updates as Record<string, unknown>)
     if (error) { console.error('updateItem:', error); return }
     set((state) => ({
       items: state.items.map((item) => (item.id === id ? { ...item, ...updates } : item)),
@@ -302,11 +279,30 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   },
 
   setItemStyles: async (itemId, styleIds) => {
-    await supabase.from('furniture_item_styles').delete().eq('furniture_item_id', itemId)
+    const token = getAuthToken()
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    }
+
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/furniture_item_styles?furniture_item_id=eq.${itemId}`,
+      { method: 'DELETE', headers }
+    )
+
     if (styleIds.length > 0) {
       const rows = styleIds.map((style_id) => ({ furniture_item_id: itemId, style_id }))
-      const { error } = await supabase.from('furniture_item_styles').insert(rows)
-      if (error) { console.error('setItemStyles:', error); return }
+      const resp = await fetch(`${SUPABASE_URL}/rest/v1/furniture_item_styles`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(rows),
+      })
+      if (!resp.ok) {
+        const text = await resp.text()
+        console.error('setItemStyles:', text)
+        return
+      }
     }
     set((state) => ({ itemStyles: { ...state.itemStyles, [itemId]: styleIds } }))
   },
@@ -314,42 +310,54 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   // ─── Variant CRUD ──────────────────────────────────────────────────────────
 
   createVariant: async (data) => {
-    const { data: row, error } = await supabase
-      .from('furniture_variants')
-      .insert({
-        furniture_item_id: data.furniture_item_id,
-        color_name: data.color_name,
-        original_image_url: data.original_image_url,
-        price_thb: data.price_thb ?? null,
-        source_url: data.source_url ?? null,
-        width_cm: data.width_cm ?? null,
-        depth_cm: data.depth_cm ?? null,
-        height_cm: data.height_cm ?? null,
-        sort_order: data.sort_order ?? 0,
-        image_status: 'processing',
-        render_status: 'waiting',
-        link_status: 'unchecked',
-      })
-      .select()
-      .single()
+    if (data.original_image_urls.length === 0) {
+      return { id: null, error: 'At least one image is required' }
+    }
 
-    if (error) return { id: null, error: error.message }
+    const isFlat = get().isItemFlat(data.furniture_item_id)
 
-    const newVariant = row as FurnitureVariant
+    // Flat items skip TRELLIS entirely → render_status='completed' immediately,
+    // render_approval_status='approved' (no .glb to review).
+    const { data: row, error } = await rawInsert<FurnitureVariant>('furniture_variants', {
+      furniture_item_id: data.furniture_item_id,
+      color_name: data.color_name,
+      original_image_urls: data.original_image_urls,
+      price_thb: data.price_thb ?? null,
+      source_url: data.source_url ?? null,
+      width_cm: data.width_cm ?? null,
+      depth_cm: data.depth_cm ?? null,
+      height_cm: data.height_cm ?? null,
+      sort_order: data.sort_order ?? 0,
+      render_status: isFlat ? 'completed' : 'waiting',
+      render_approval_status: isFlat ? 'approved' : 'pending',
+      link_status: 'unchecked',
+    })
+
+    if (error || !row) return { id: null, error: error ?? 'Insert returned no data' }
+
     set((state) => {
       const existing = state.variants[data.furniture_item_id] ?? []
       return {
         variants: {
           ...state.variants,
-          [data.furniture_item_id]: [...existing, newVariant],
+          [data.furniture_item_id]: [...existing, row],
         },
       }
     })
-    return { id: newVariant.id, error: null }
+
+    // For non-flat items: fire-and-forget the TRELLIS + sprite pipeline.
+    // Render approval happens after sprites come back.
+    if (!isFlat) {
+      runRenderPipeline(row.id).catch((err) =>
+        console.warn('[createVariant] pipeline error:', err)
+      )
+    }
+
+    return { id: row.id, error: null }
   },
 
   updateVariant: async (id, updates) => {
-    const { error } = await supabase.from('furniture_variants').update(updates).eq('id', id)
+    const { error } = await rawUpdate('furniture_variants', id, updates as Record<string, unknown>)
     if (error) { console.error('updateVariant:', error); return }
     set((state) => {
       const newVariants: Record<string, FurnitureVariant[]> = {}
@@ -360,155 +368,75 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
   },
 
-  uploadVariantImage: async (variantId, file) => {
+  uploadVariantImage: async (storagePrefix, file) => {
     const ext = file.name.split('.').pop() ?? 'jpg'
-    const path = `${variantId}/${crypto.randomUUID()}.${ext}`
-
-    console.log('[uploadVariantImage] Starting upload…', { path, fileSize: file.size, fileType: file.type })
+    const path = `${storagePrefix}/${crypto.randomUUID()}.${ext}`
 
     try {
-      const uploadPromise = supabase.storage
-        .from('original-images')
-        .upload(path, file, { upsert: false })
-
-      // 30-second timeout to prevent infinite hang
-      const timeoutPromise = new Promise<{ error: { message: string } }>((resolve) =>
-        setTimeout(() => resolve({ error: { message: 'Upload timed out after 30 seconds' } }), 30000)
+      const token = getAuthToken()
+      const resp = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/original-images/${path}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: SUPABASE_ANON_KEY,
+          },
+          body: file,
+        }
       )
 
-      const { error: uploadError } = await Promise.race([uploadPromise, timeoutPromise])
-      console.log('[uploadVariantImage] Upload complete', { error: uploadError?.message ?? null })
+      if (!resp.ok) {
+        const text = await resp.text()
+        console.error('[uploadVariantImage] Upload failed:', resp.status, text)
+        return { url: null, error: text || `Upload failed (HTTP ${resp.status})` }
+      }
 
-      if (uploadError) return { url: null, error: uploadError.message }
-
-      const { data } = supabase.storage.from('original-images').getPublicUrl(path)
-      return { url: data.publicUrl, error: null }
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/original-images/${path}`
+      return { url: publicUrl, error: null }
     } catch (err) {
       console.error('[uploadVariantImage] Unexpected error:', err)
       return { url: null, error: String(err) }
     }
   },
 
-  triggerBackgroundRemoval: async (variantId) => {
-    console.log('[triggerBgRemoval] Starting for variant:', variantId)
-    // Update local Zustand state only (no DB write) — variant is already
-    // created with image_status='processing' in the database.
-    // Avoids concurrent DB ops that hang the Supabase client.
-    set((state) => {
-      const newVariants: Record<string, FurnitureVariant[]> = {}
-      for (const [itemId, list] of Object.entries(state.variants)) {
-        newVariants[itemId] = list.map((v) =>
-          v.id === variantId ? { ...v, image_status: 'processing' as ImageStatus } : v
-        )
-      }
-      return { variants: newVariants }
-    })
+  // ─── Post-TRELLIS approval ──────────────────────────────────────────────────
 
-    console.log('[triggerBgRemoval] Calling remove-background edge function…')
-    const { error } = await invokeEdgeFunction('remove-background', { variant_id: variantId })
-    console.log('[triggerBgRemoval] Edge function returned:', { error })
+  approveRender: async (variantId) => {
+    const { error } = await rawUpdate('furniture_variants', variantId, {
+      render_approval_status: 'approved',
+    })
     if (error) return { error }
-
-    // Reload the variant to pick up the status set by the edge function
-    // (pending_approval on success, rejected on failure)
-    const itemId = Object.entries(get().variants).find(
-      ([, list]) => list.some((v) => v.id === variantId)
-    )?.[0]
-    console.log('[triggerBgRemoval] Reloading variants for item:', itemId)
-    if (itemId) await get().loadVariantsForItem(itemId)
-
-    // Log final status
-    const updatedVariant = Object.values(get().variants).flat().find((v) => v.id === variantId)
-    console.log('[triggerBgRemoval] Done. Variant status:', {
-      image_status: updatedVariant?.image_status,
-      clean_image_url: !!updatedVariant?.clean_image_url,
-    })
-
+    set((state) => ({ variants: mapVariant(state.variants, variantId, { render_approval_status: 'approved' as RenderApprovalStatus }) }))
     return { error: null }
   },
 
-  // ─── AI pipeline transitions ────────────────────────────────────────────────
-
-  approveImage: async (variantId) => {
-    console.log('[approveImage] Approving variant:', variantId)
-    const { error: dbError } = await supabase
-      .from('furniture_variants')
-      .update({ image_status: 'approved' as ImageStatus, render_status: 'processing' })
-      .eq('id', variantId)
-    if (dbError) {
-      console.error('[approveImage] DB error:', dbError)
-      return { error: dbError.message }
-    }
-    console.log('[approveImage] DB updated, updating local state')
-
-    // Update local Zustand state directly (DB already updated above)
-    set((state) => {
-      const newVariants: Record<string, FurnitureVariant[]> = {}
-      for (const [itemId, list] of Object.entries(state.variants)) {
-        newVariants[itemId] = list.map((v) =>
-          v.id === variantId ? { ...v, image_status: 'approved' as ImageStatus, render_status: 'processing' as FurnitureVariant['render_status'] } : v
-        )
-      }
-      return { variants: newVariants }
+  rejectRender: async (variantId) => {
+    const { error } = await rawUpdate('furniture_variants', variantId, {
+      render_approval_status: 'rejected',
     })
-
-    // Trigger TRELLIS → then render sprites client-side
-    console.log('[approveImage] Triggering generate-3d-model…')
-    invokeEdgeFunction('generate-3d-model', { variant_id: variantId })
-      .then(async (result) => {
-        console.log('[approveImage] generate-3d-model completed:', result)
-        if (result.error) return
-
-        // Get glb_path from edge function response (avoids DB reload that hangs)
-        const glbPath = result.data?.glb_path as string | undefined
-        if (!glbPath) {
-          console.error('[approveImage] No glb_path in generate-3d-model response')
-          return
-        }
-
-        // Update local state with glb_path
-        set((state) => {
-          const newVariants: Record<string, FurnitureVariant[]> = {}
-          for (const [itemId, list] of Object.entries(state.variants)) {
-            newVariants[itemId] = list.map((v) =>
-              v.id === variantId ? { ...v, glb_path: glbPath } : v
-            )
-          }
-          return { variants: newVariants }
-        })
-
-        // Render sprites client-side in the browser
-        console.log('[approveImage] Starting client-side sprite rendering, glb_path:', glbPath)
-        const spriteResult = await renderSprites(variantId, glbPath)
-        console.log('[approveImage] Sprite rendering result:', spriteResult)
-
-        // Reload variant to reflect final render_status
-        const itemId = Object.entries(get().variants).find(
-          ([, list]) => list.some((v) => v.id === variantId)
-        )?.[0]
-        if (itemId) await get().loadVariantsForItem(itemId)
-      })
-      .catch((err) => console.warn('[approveImage] pipeline error:', err))
-
+    if (error) return { error }
+    set((state) => ({ variants: mapVariant(state.variants, variantId, { render_approval_status: 'rejected' as RenderApprovalStatus }) }))
     return { error: null }
   },
 
-  rejectImage: async (variantId) => {
-    const { error } = await supabase
-      .from('furniture_variants')
-      .update({ image_status: 'rejected' as ImageStatus })
-      .eq('id', variantId)
-    if (error) { console.error('rejectImage:', error); return }
-    // Update local state directly (DB already updated above)
-    set((state) => {
-      const newVariants: Record<string, FurnitureVariant[]> = {}
-      for (const [itemId, list] of Object.entries(state.variants)) {
-        newVariants[itemId] = list.map((v) =>
-          v.id === variantId ? { ...v, image_status: 'rejected' as ImageStatus } : v
-        )
-      }
-      return { variants: newVariants }
+  retryRender: async (variantId) => {
+    // Reset approval + render status, then re-run pipeline
+    const { error } = await rawUpdate('furniture_variants', variantId, {
+      render_approval_status: 'pending',
+      render_status: 'waiting',
+      glb_path: null,
     })
+    if (error) return { error }
+    set((state) => ({
+      variants: mapVariant(state.variants, variantId, {
+        render_approval_status: 'pending' as RenderApprovalStatus,
+        render_status: 'waiting' as RenderStatus,
+        glb_path: null,
+      }),
+    }))
+    runRenderPipeline(variantId).catch((err) => console.warn('[retryRender]', err))
+    return { error: null }
   },
 
   // ─── Catalog approval ──────────────────────────────────────────────────────
@@ -582,18 +510,80 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 
   getVariantsForItem: (itemId) => get().variants[itemId] ?? [],
 
-  getSpritesForVariant: (variantId) => get().sprites[variantId] ?? [],
 
-  getPendingApprovalVariants: () => {
+  getPendingRenderApprovalVariants: () => {
     const { items, variants } = get()
     const result: Array<{ item: FurnitureItem; variant: FurnitureVariant }> = []
     for (const item of items) {
       for (const variant of variants[item.id] ?? []) {
-        if (variant.image_status === 'pending_approval') {
+        if (variant.render_approval_status === 'pending' && variant.glb_path) {
           result.push({ item, variant })
         }
       }
     }
     return result
   },
+
+  isItemFlat: (itemId) => {
+    const { items, categories } = get()
+    const item = items.find((i) => i.id === itemId)
+    if (!item) return false
+    if (item.is_flat_override !== null && item.is_flat_override !== undefined) {
+      return item.is_flat_override
+    }
+    const cat = categories.find((c) => c.id === item.category_id)
+    return cat?.is_flat ?? false
+  },
 }))
+
+// ── Pipeline helpers ─────────────────────────────────────────────────────────
+
+function mapVariant(
+  variants: Record<string, FurnitureVariant[]>,
+  variantId: string,
+  updates: Partial<FurnitureVariant>
+): Record<string, FurnitureVariant[]> {
+  const out: Record<string, FurnitureVariant[]> = {}
+  for (const [itemId, list] of Object.entries(variants)) {
+    out[itemId] = list.map((v) => (v.id === variantId ? { ...v, ...updates } : v))
+  }
+  return out
+}
+
+/**
+ * Drives the post-variant-creation pipeline for non-flat items:
+ *   1. Set render_status = 'processing' locally
+ *   2. Invoke generate-3d-model (TRELLIS)
+ *   3. Render 4 isometric sprites client-side
+ *   4. Set render_status = 'completed' | 'failed'
+ *
+ * render_approval_status stays 'pending' regardless — designer decides.
+ * DB writes happen inside the edge function; this function only mirrors
+ * render_status locally.
+ *
+ * Phase 8 update: sprite rendering removed. The .glb is the canvas asset
+ * directly (rendered in Three.js), so render_status flips to 'completed'
+ * as soon as TRELLIS returns a valid glb_path.
+ */
+async function runRenderPipeline(variantId: string): Promise<void> {
+  const patch = (updates: Partial<FurnitureVariant>) =>
+    useCatalogStore.setState((state) => ({
+      variants: mapVariant(state.variants, variantId, updates),
+    }))
+
+  patch({ render_status: 'processing' as RenderStatus })
+
+  const result = await invokeEdgeFunction('generate-3d-model', { variant_id: variantId })
+  if (result.error) {
+    patch({ render_status: 'failed' as RenderStatus })
+    return
+  }
+
+  const glbPath = result.data?.glb_path as string | undefined
+  if (!glbPath) {
+    patch({ render_status: 'failed' as RenderStatus })
+    return
+  }
+
+  patch({ glb_path: glbPath, render_status: 'completed' as RenderStatus })
+}

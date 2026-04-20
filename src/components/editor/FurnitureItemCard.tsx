@@ -16,13 +16,9 @@ const STATUS_COLOR: Record<string, string> = {
   rejected: 'var(--color-error)',
 }
 
-/** Returns the best display image for a variant: sprite > clean_image > original */
+/** Returns the primary (first) source image URL for a variant, if any. */
 function variantThumbUrl(variant: FurnitureVariant): string | null {
-  if (variant.original_image_url) {
-    // original_image_url is stored as a full public URL
-    return variant.original_image_url
-  }
-  return null
+  return variant.original_image_urls[0] ?? null
 }
 
 export default function FurnitureItemCard({
@@ -42,10 +38,9 @@ export default function FurnitureItemCard({
     ? `฿${price.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
     : null
 
-  // Pending approval count
-  const pendingCount = variants.filter((v) => v.image_status === 'pending_approval').length
-  const processingCount = variants.filter((v) => v.image_status === 'processing').length
-  const renderingCount = variants.filter((v) => v.render_status === 'processing').length
+  // 3D model approval count (render_approval_status='pending' + glb ready)
+  const pendingCount = variants.filter((v) => v.render_approval_status === 'pending' && v.glb_path).length
+  const renderingCount = variants.filter((v) => v.render_status === 'processing' || v.render_status === 'waiting').length
 
   return (
     <div
@@ -92,7 +87,7 @@ export default function FurnitureItemCard({
             {variants.slice(0, 6).map((v) => (
               <div
                 key={v.id}
-                className={`fi-swatch ${v.image_status === 'pending_approval' ? 'needs-approval' : ''}`}
+                className={`fi-swatch ${v.render_approval_status === 'pending' && v.glb_path ? 'needs-approval' : ''}`}
                 title={v.color_name}
               />
             ))}
@@ -105,12 +100,7 @@ export default function FurnitureItemCard({
         {/* Processing badges */}
         {pendingCount > 0 && (
           <div className="fi-badge warning">
-            {pendingCount} image{pendingCount > 1 ? 's' : ''} need approval
-          </div>
-        )}
-        {processingCount > 0 && (
-          <div className="fi-badge info">
-            Removing bg…
+            {pendingCount} 3D model{pendingCount > 1 ? 's' : ''} need review
           </div>
         )}
         {renderingCount > 0 && (

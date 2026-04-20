@@ -5,7 +5,7 @@ import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import FurnitureItemCard from './FurnitureItemCard'
 import AddFurnitureModal from './AddFurnitureModal'
-import ImageApprovalModal from './ImageApprovalModal'
+import ModelApprovalModal from './ModelApprovalModal'
 import type { FurnitureItem, FurnitureVariant } from '@/types'
 
 export default function CatalogPanel() {
@@ -24,7 +24,7 @@ export default function CatalogPanel() {
     setSelectedCategory,
     approveItem,
     rejectItem,
-    getPendingApprovalVariants,
+    getPendingRenderApprovalVariants,
   } = useCatalogStore()
   const { profile } = useAuthStore()
 
@@ -56,14 +56,14 @@ export default function CatalogPanel() {
     }
   }, [filteredItems.length, loadVariantsForItem])
 
-  // Poll for variant status updates (processing bg removal or 3D rendering)
+  // Poll for variant status updates (3D generation in progress)
   useEffect(() => {
     const interval = setInterval(() => {
       const state = useCatalogStore.getState()
       for (const item of filteredItems) {
         const variants = state.variants[item.id] ?? []
         const hasProcessing = variants.some(
-          (v) => v.image_status === 'processing' || v.render_status === 'processing'
+          (v) => v.render_status === 'processing' || v.render_status === 'waiting'
         )
         if (hasProcessing) {
           loadVariantsForItem(item.id)
@@ -79,7 +79,7 @@ export default function CatalogPanel() {
     ? filteredItems.filter((i) => i.status === 'pending')
     : filteredItems
 
-  const pendingApprovalVariants = getPendingApprovalVariants()
+  const pendingApprovalVariants = getPendingRenderApprovalVariants()
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -158,12 +158,12 @@ export default function CatalogPanel() {
         </div>
       )}
 
-      {/* Image approval banner */}
+      {/* 3D model approval banner */}
       {pendingApprovalVariants.length > 0 && (
         <div className="approval-banner">
           <CheckCircle size={13} />
           <span>
-            {pendingApprovalVariants.length} image{pendingApprovalVariants.length > 1 ? 's' : ''} need your approval
+            {pendingApprovalVariants.length} 3D model{pendingApprovalVariants.length > 1 ? 's' : ''} need your review
           </span>
           <button
             className="approval-banner-btn"
@@ -215,9 +215,9 @@ export default function CatalogPanel() {
                       Place on Canvas
                     </button>
                   )}
-                  {/* Image approval buttons */}
+                  {/* 3D model approval buttons — variant has a .glb but hasn't been approved yet */}
                   {variants
-                    .filter((v) => v.image_status === 'pending_approval')
+                    .filter((v) => v.render_approval_status === 'pending' && v.glb_path)
                     .map((v) => (
                       <button
                         key={v.id}
@@ -225,7 +225,7 @@ export default function CatalogPanel() {
                         onClick={() => handleImageApprovalClick(item, v)}
                       >
                         <CheckCircle size={12} />
-                        Review "{v.color_name}" image
+                        Review "{v.color_name}" 3D model
                       </button>
                     ))}
 
@@ -279,13 +279,13 @@ export default function CatalogPanel() {
         <AddFurnitureModal onClose={() => setShowAddModal(false)} />
       )}
       {approvalTarget && (
-        <ImageApprovalModal
+        <ModelApprovalModal
           item={approvalTarget.item}
           variant={approvalTarget.variant}
           onClose={() => setApprovalTarget(null)}
           onNext={() => {
             // Advance to next pending variant if any
-            const pending = getPendingApprovalVariants()
+            const pending = getPendingRenderApprovalVariants()
             const nextIdx = pending.findIndex((p) => p.variant.id !== approvalTarget.variant.id)
             setApprovalTarget(nextIdx >= 0 ? pending[nextIdx] : null)
           }}

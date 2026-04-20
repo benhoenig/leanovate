@@ -17,13 +17,15 @@
 
 ## Design Principles
 
-1. **Parent + Variants model** — Each furniture product has a parent record (shared name, category, dimensions) and one or more color variants (each with its own image, price, link, .glb, and sprites). This mirrors how real products work on Shopee/IKEA.
+1. **Parent + Variants model** — Each furniture product has a parent record (shared name, category, dimensions) and one or more color variants (each with its own images, price, link, .glb, and sprites). This mirrors how real products work on Shopee/IKEA.
+
+   **Flat-item bypass:** Categories can be flagged as `is_flat` (e.g. Rug) — flat items skip TRELLIS entirely and use the uploaded image directly as the canvas asset. Individual items can override this with `is_flat_override`.
 
 2. **Live calculation, not stored snapshots** — Cost summaries are calculated on the fly from current variant prices + manually entered renovation costs. No stale price snapshots. Staleness alerts handle the case where prices change between visits.
 
 3. **JSON for geometry, relational for everything else** — Room geometry (walls, doors, windows) and template snapshots are stored as JSON because they're consumed as single blobs. Everything with relationships (items, variants, sprites, categories) uses proper relational tables.
 
-4. **Two approval workflows** — (a) Image approval: designer reviews background-removed images before AI sprite generation. (b) Catalog approval: admin reviews designer-submitted items before they enter the shared catalog.
+4. **Two approval workflows** — (a) Render approval: after TRELLIS generates a .glb, designer reviews the 3D model in a spinning preview and approves/rejects/retries it (post-TRELLIS gate, replaces the pre-TRELLIS rembg gate from V1). Variants are usable on the canvas with the uploaded photo as placeholder while approval is pending. (b) Catalog approval: admin reviews designer-submitted items before they enter the shared catalog.
 
 5. **Supabase Row-Level Security (RLS)** — All tables use RLS policies. Designers can only see their own draft items + all approved items. Admins see everything. Detailed RLS rules are defined in `integration-contracts.md`.
 
@@ -40,11 +42,11 @@ CREATE TYPE user_role AS ENUM ('admin', 'designer');
 -- Furniture item catalog status
 CREATE TYPE item_status AS ENUM ('draft', 'pending', 'approved', 'rejected');
 
--- Image approval pipeline status
-CREATE TYPE image_status AS ENUM ('processing', 'pending_approval', 'approved', 'rejected');
-
 -- AI rendering pipeline status
 CREATE TYPE render_status AS ENUM ('waiting', 'processing', 'completed', 'failed');
+
+-- Designer approval of the generated 3D model (post-TRELLIS gate)
+CREATE TYPE render_approval_status AS ENUM ('pending', 'approved', 'rejected');
 
 -- Isometric viewing directions
 CREATE TYPE direction AS ENUM ('front_left', 'front_right', 'back_left', 'back_right');
@@ -135,6 +137,7 @@ Top-level groupings for the furniture catalog.
 | name | text | NOT NULL, UNIQUE | e.g. "Sofa", "Bed", "Dining Table", "TV Stand", "Lamp", "Wardrobe" |
 | icon | text | nullable | Icon identifier for UI display |
 | sort_order | integer | NOT NULL, default 0 | Display order in catalog browser |
+| is_flat | boolean | NOT NULL, default false | If true, items in this category skip TRELLIS entirely — the first uploaded image is used directly as the canvas asset. Seeded true for `Rug`. |
 
 #### styles
 
@@ -162,6 +165,7 @@ The parent product record. Holds shared details — no color-specific data. Each
 | height_cm | integer | nullable | Default physical height |
 | description | text | nullable | Product description (scraped, designer can override) |
 | status | item_status | NOT NULL, default 'draft' | draft = personal only, pending = submitted for review, approved = in shared catalog, rejected = admin declined |
+| is_flat_override | boolean | nullable | Per-item override of `category.is_flat`. Null = inherit from category. Lets designers flag a thin/flat item (e.g. a thin headboard) that falls in a non-flat category. |
 | submitted_by | uuid | FK → profiles.id, NOT NULL | Designer who added this item |
 | reviewed_by | uuid | FK → profiles.id, nullable | Admin who approved/rejected |
 | reviewed_at | timestamptz | nullable | When the review happened |
@@ -194,11 +198,10 @@ Color/material variants of a parent furniture item. Each variant has its own ima
 | width_cm | integer | nullable | Override parent dimensions if this variant differs in size |
 | depth_cm | integer | nullable | |
 | height_cm | integer | nullable | |
-| original_image_url | text | NOT NULL | Designer-uploaded product photo (before background removal) |
-| clean_image_url | text | nullable | Background-removed image from rembg. Null until rembg completes |
-| image_status | image_status | NOT NULL, default 'processing' | processing = rembg running, pending_approval = awaiting designer review, approved = cleared for TRELLIS, rejected = designer rejected the clean image |
-| glb_path | text | nullable | Path to TRELLIS-generated .glb file in Supabase Storage. Null until TRELLIS completes |
-| render_status | render_status | NOT NULL, default 'waiting' | waiting = awaiting image approval, processing = TRELLIS/Three.js running, completed = all 4 sprites ready, failed = generation failed |
+| original_image_urls | text[] | NOT NULL, default ARRAY[]::text[] | Designer-uploaded product photos. 1+ images per variant — first image is the primary/fallback. Multiple images improve TRELLIS output quality significantly. |
+| glb_path | text | nullable | Path to TRELLIS-generated .glb file in Supabase Storage. Null for flat items (bypass). Null until TRELLIS completes for non-flat items. |
+| render_status | render_status | NOT NULL, default 'waiting' | waiting = pipeline queued, processing = TRELLIS/Three.js running, completed = ready (flat items: completed immediately with no .glb), failed = generation failed |
+| render_approval_status | render_approval_status | NOT NULL, default 'pending' | Post-TRELLIS designer gate. pending = awaiting review, approved = designer confirmed the 3D model is good, rejected = designer flagged it as bad. Flat items default to 'approved' (no .glb to review). |
 | link_status | link_status | NOT NULL, default 'unchecked' | For daily link validity recheck. Checked against variant's source_url (or parent's if null) |
 | last_checked_at | timestamptz | nullable | Last time the link was verified by the daily recheck job |
 | price_changed | boolean | NOT NULL, default false | Flagged true if daily recheck detected a significant price change (>20% threshold). Reset to false when designer acknowledges |
@@ -206,7 +209,7 @@ Color/material variants of a parent furniture item. Each variant has its own ima
 | created_at | timestamptz | NOT NULL, default now() | |
 | updated_at | timestamptz | NOT NULL, default now() | Auto-updated via trigger |
 
-**Indexes:** `furniture_item_id`, `image_status`, `render_status`, `link_status`
+**Indexes:** `furniture_item_id`, `render_status`, `render_approval_status`, `link_status`
 
 #### furniture_sprites
 
@@ -365,13 +368,14 @@ profiles
 ## Data Flow Summary
 
 ### Adding a new furniture item
-1. Designer pastes product link → Edge Function scrapes name, dimensions, description → `furniture_items` row created (status: draft)
-2. Designer reviews scraped data, overrides if needed → `furniture_items` updated
-3. Designer uploads color variant images with color name + optional price/link → `furniture_variants` rows created (image_status: processing)
-4. rembg processes each image → `clean_image_url` set, `image_status` → pending_approval
-5. Designer approves each clean image → `image_status` → approved, `render_status` → processing
-6. TRELLIS generates .glb → `glb_path` set → Three.js renders 4 sprites → `furniture_sprites` rows created → `render_status` → completed
-7. Designer can use item on canvas at any point after step 3 (original photo as placeholder until sprites are ready)
+1. Designer uploads a product screenshot + optional product link → Edge Function extracts name, dimensions, description → `furniture_items` row created (status: draft). Optional `is_flat_override` per item.
+2. Designer reviews extracted data, overrides if needed → `furniture_items` updated
+3. Designer uploads 1+ cropped product photos per color variant (first image is primary) → `furniture_variants` rows created with `original_image_urls[]`
+4. **Branch based on flat bypass:**
+   - If `category.is_flat` (or `items.is_flat_override` = true): skip TRELLIS. `render_status` set to `completed` and `render_approval_status` to `approved` immediately. First uploaded image serves as canvas asset.
+   - Otherwise: `render_status` → processing. TRELLIS runs with all uploaded images (multi-image mode) → `glb_path` set → Three.js renders 4 sprites → `furniture_sprites` rows created → `render_status` → completed. `render_approval_status` stays `pending`.
+5. Designer reviews the generated .glb in the Model Approval Modal (spinning 3D preview) → sets `render_approval_status` to approved, rejected, or retries (re-runs TRELLIS from the same images).
+6. Designer can use the item on canvas at any point after step 3 — the first uploaded image acts as the placeholder until sprites are ready.
 
 ### Daily link validity recheck
 1. Scheduled Edge Function picks a batch of `furniture_variants` ordered by `last_checked_at` (oldest first)

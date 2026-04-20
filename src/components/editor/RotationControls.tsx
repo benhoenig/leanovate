@@ -1,7 +1,7 @@
 import { useCanvasStore } from '@/stores/useCanvasStore'
-import type { Direction } from '@/types'
+import type { RoomRotation } from '@/lib/roomGeometry'
 
-const ROTATIONS: { dir: Direction; label: string }[] = [
+const ROTATIONS: { dir: RoomRotation; label: string }[] = [
   { dir: 'front_left', label: 'NW' },
   { dir: 'front_right', label: 'NE' },
   { dir: 'back_right', label: 'SE' },

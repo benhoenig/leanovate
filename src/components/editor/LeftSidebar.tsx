@@ -3,7 +3,7 @@ import { Plus, Trash2, Upload } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { supabase } from '@/lib/supabase'
+import { supabase, rawStorageUpload } from '@/lib/supabase'
 import type { FinishType } from '@/types'
 import CatalogPanel from './CatalogPanel'
 import TemplatePanel from './TemplatePanel'
@@ -61,15 +61,14 @@ export default function LeftSidebar() {
     if (!user) return
     const ext = file.name.split('.').pop() ?? 'jpg'
     const path = `${user.id}/${crypto.randomUUID()}.${ext}`
-    const { error: uploadError } = await supabase.storage.from('textures').upload(path, file)
-    if (uploadError) {
+    const { publicUrl, error: uploadError } = await rawStorageUpload('textures', path, file, { contentType: file.type })
+    if (uploadError || !publicUrl) {
       showToast('Upload failed', 'error')
       return
     }
-    const { data: urlData } = supabase.storage.from('textures').getPublicUrl(path)
     const { data: matData, error: insertError } = await supabase
       .from('finish_materials')
-      .insert({ type, name: file.name, thumbnail_path: urlData.publicUrl, is_custom: true, uploaded_by: user.id })
+      .insert({ type, name: file.name, thumbnail_path: publicUrl, is_custom: true, uploaded_by: user.id })
       .select()
       .single()
     if (insertError) {

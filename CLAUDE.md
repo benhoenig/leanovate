@@ -8,24 +8,64 @@ Internal isometric room planner for an interior design team serving condo invest
 - @docs/schema.md — Database tables, fields, relationships, data flows
 - @docs/design.md — Visual system (colors, typography, spacing, component styling)
 - @docs/state-map.md — Zustand store domains and ownership rules
-- @docs/integration-contracts.md — External API contracts (Supabase, Replicate, scraping, rembg, Three.js)
+- @docs/integration-contracts.md — External API contracts (Supabase, Replicate, screenshot extraction, Three.js)
 - @docs/implementation-plan.md — Build phases, dependencies, what to test
+- @docs/designer-workflow.md — External photo preprocessing (Nano Banana) before upload (Phase 7+)
 
 ## Tech Stack
 - Frontend: React 18+ / TypeScript 5+ / Vite 5+ / PixiJS 8+ / Zustand 4+ / shadcn/ui / Tailwind 3+
 - Backend: Supabase (auth, PostgreSQL, storage, edge functions)
-- AI Pipeline: rembg (background removal) → TRELLIS via Replicate (image → .glb 3D model) → Three.js (client-side .glb → isometric sprites)
+- AI Pipeline: TRELLIS via Replicate (multi-image → .glb 3D model, does its own background removal) → Three.js (client-side .glb → isometric sprites). Flat items (rugs, etc.) bypass TRELLIS entirely.
 - Hosting: Vercel (frontend) + Supabase Cloud (backend)
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-ALL 6 PHASES COMPLETE
-<!-- Phase 1: Foundation — COMPLETE (schema + storage buckets in supabase/migrations/20240101000000_full_schema.sql) -->
-<!-- Phase 2: Room Builder — COMPLETE -->
-<!-- Phase 4: Isometric Canvas — COMPLETE (furniture placement, drag, rotate, variant switch, room rotation, right panel properties) -->
-<!-- Phase 3: Furniture Catalog + AI Pipeline — COMPLETE (seed migration, useCatalogStore, CatalogPanel, AddFurnitureModal, ImageApprovalModal, 4 edge functions) -->
-<!-- Phase 5: Templates + Cost Summary — COMPLETE (3-layer templates, cost panel, staleness alerts) -->
-<!-- Phase 6: Room Preview + Admin + Daily Recheck + Construction Drawing Export — COMPLETE -->
+V1 COMPLETE (Phases 1–6) + Phase 7 COMPLETE. Phase 8 (3D canvas rebuild, Sims-style) pending.
+
+## Phase 7 Completion Notes
+Pipeline simplification — dropped rembg, added multi-image TRELLIS input, added flat-item bypass, moved approval gate from pre-TRELLIS (image review) to post-TRELLIS (.glb review).
+
+### Schema changes (migration 20240105000000_phase7_pipeline.sql)
+- **Dropped:** `furniture_variants.clean_image_url`, `furniture_variants.image_status`, `image_status` enum
+- **Replaced:** `original_image_url text` → `original_image_urls text[]` (1+ images per variant, first is primary/fallback)
+- **Added:** `render_approval_status` enum (pending|approved|rejected) + column on variants
+- **Added:** `furniture_categories.is_flat boolean` (seeded true for `Rug`), `furniture_items.is_flat_override boolean` (nullable per-item override)
+- **Clean slate:** truncated `furniture_items` (CASCADE wipes variants/sprites/placed) + templates that referenced them. Preserved categories, styles, profiles, finish_materials.
+
+### Pipeline flow
+```
+Variant created with original_image_urls[]
+  ↓
+Flat? (category.is_flat OR item.is_flat_override)
+  ├── YES: render_status='completed', render_approval_status='approved'
+  │        No TRELLIS. First image = canvas asset. No .glb, no sprites.
+  └── NO:  runRenderPipeline() fires:
+           1. render_status='processing'
+           2. generate-3d-model Edge Function (multi-image → .glb)
+           3. client-side renderSprites() → 4 PNGs → sprites bucket
+           4. render_status='completed'
+           render_approval_status stays 'pending' until designer reviews
+```
+Designer reviews .glb in ModelApprovalModal (spinning 3D preview) → Approve / Reject / Retry (re-runs TRELLIS with same images).
+
+### Key files
+- `supabase/functions/generate-3d-model/index.ts` — accepts `variant_id`, reads `original_image_urls[]`, signs URLs, passes `images: [...]` to TRELLIS. No pre-approval check.
+- `supabase/functions/remove-background/` — **DELETED**.
+- `src/stores/useCatalogStore.ts` — rewritten:
+  - `createVariant` writes array + kicks off pipeline (or skips for flat)
+  - `approveRender` / `rejectRender` / `retryRender` — post-TRELLIS gate actions
+  - `runRenderPipeline()` — fire-and-forget TRELLIS → sprites helper, updates state via `useCatalogStore.setState`
+  - `isItemFlat(itemId)` — effective flat check
+  - `getPendingRenderApprovalVariants()` — variants awaiting review
+  - **Removed:** `triggerBackgroundRemoval`, `approveImage`, `rejectImage`, `getPendingApprovalVariants`
+- `src/components/editor/AddFurnitureModal.tsx` — multi-image upload per variant (add/remove/reorder thumbs, sequential upload with progress).
+- `src/components/editor/ModelApprovalModal.tsx` — NEW. Auto-rotating Three.js .glb preview + source photo panel + Approve/Reject/Retry.
+- `src/components/editor/ImageApprovalModal.tsx` — **DELETED**.
+- `src/components/editor/IsometricCanvas.tsx` — `getFallbackUrl` uses `original_image_urls[0]`. Flat items render via this fallback at all 4 rotations (no sprite rows needed — throwaway bridge, Phase 8 drops sprites entirely).
+- `src/components/admin/CatalogOverview.tsx` — dropped "Re-run BG" action. "Regen Sprites" reuses existing .glb if present.
+
+### Designer workflow (external)
+`docs/designer-workflow.md` — designers prep messy source photos via Nano Banana (Google Gemini) before uploading. Template prompt: *"Isolate only the [item type]. Generate [N] separate clean product shots on pure white background: front, 3/4, side. Output as separate images."* No built-in preprocessing for v1.
 
 ## Phase 2 Completion Notes
 All Phase 2 verification steps pass. Key implementation details for future reference:
@@ -250,10 +290,11 @@ Admin catalog management, team management, room perspective preview, daily link 
 1. **Read the relevant doc before implementing any feature.** Each doc owns a specific domain — check the scope table at the top of each file.
 2. **Never duplicate state across Zustand stores.** Catalog Store is the single source of truth for all product data. Other stores reference by ID only. See state-map.md.
 3. **Cost summary is always computed live, never stored.** Derive from placed furniture variant prices (Catalog Store) + manual costs (Project Store).
-4. **Furniture uses a parent + variants model.** Parent item holds shared details. Each color variant has its own image, price, link, .glb, and sprites. See schema.md.
-5. **Image approval is a hard gate.** Designer must approve background-removed images before TRELLIS runs. See integration-contracts.md.
+4. **Furniture uses a parent + variants model.** Parent item holds shared details. Each color variant has its own `original_image_urls[]` (1+ photos), price, link, .glb, and sprites. See schema.md.
+5. **Approval is post-TRELLIS, not pre-TRELLIS.** Variants start with `render_approval_status='pending'`. After TRELLIS generates a .glb, designer reviews it in ModelApprovalModal and approves/rejects/retries. Approval is a quality signal — it does NOT gate canvas placement. Flat items (category.is_flat or item.is_flat_override) skip TRELLIS entirely and auto-approve.
 6. **Designer uploads images manually.** The scraper only extracts text data (name, description, dimensions). It does NOT download product images.
 7. **Three.js sprite rendering runs client-side.** After TRELLIS generates a .glb, the browser renders 4 isometric sprites using Three.js (src/lib/renderSprites.ts) and uploads them to Supabase Storage. PixiJS handles all canvas rendering. Three.js is used server-side only for room perspective previews.
+8. **NEVER use `supabase.from()`, `supabase.storage`, or `supabase.auth` for write operations, OR call any store `load*` function from action callbacks while CatalogPanel is mounted.** The Supabase JS client deadlocks when two async operations run concurrently through the same instance — no error, no timeout, just a permanent hang. CatalogPanel polls `loadVariantsForItem` every 5 seconds, so ANY other Supabase client call (including reads!) can collide with it. **Use raw fetch helpers from `@/lib/supabase` instead:** `rawInsert`, `rawInsertMany`, `rawUpdate`, `rawUpdateWhere`, `rawDelete`, `rawDeleteWhere`, `rawStorageUpload`, `rawStorageDownload`, `getPublicStorageUrl`, plus `getAuthToken` and `invokeEdgeFunction` (in `useCatalogStore.ts`). Read-only queries inside store `load*` methods themselves may still use the client (they're the only thing running on initial mount), but action callbacks must NOT trigger re-fetches via `load*` — trust the local Zustand state updates instead. The only safe Supabase client uses are: (a) read-only `.select()` queries inside `load*` methods, (b) `supabase.auth.*` calls in `useAuthStore.ts` (login/signup/signout never run concurrently with polling).
 
 ## API Keys Required
 - **Supabase:** Project URL + anon key + service role key (from Supabase dashboard)

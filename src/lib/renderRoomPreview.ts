@@ -11,9 +11,9 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { supabase } from './supabase'
+import { rawStorageDownload } from './supabase'
 import { getVertices, polygonCentroid } from './roomGeometry'
-import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, Direction, RoomDoor, RoomWindow } from '@/types'
+import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, RoomDoor, RoomWindow } from '@/types'
 
 const PREVIEW_WIDTH = 1920
 const PREVIEW_HEIGHT = 1080
@@ -42,14 +42,6 @@ export interface RenderResult {
   blob: Blob | null
   error: string | null
   warnings: string[]
-}
-
-/** Direction → Y-axis rotation angle (radians) */
-const DIRECTION_ANGLES: Record<Direction, number> = {
-  front_left: Math.PI * 1.25,   // 225°
-  front_right: Math.PI * 1.75,  // 315°
-  back_right: Math.PI * 0.25,   // 45°
-  back_left: Math.PI * 0.75,    // 135°
 }
 
 // ── Shared types ──────────────────────────────────────────────────────────────
@@ -334,9 +326,7 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
     }
 
     try {
-      const { data: glbBlob, error: dlErr } = await supabase.storage
-        .from('glb-models')
-        .download(variant.glb_path)
+      const { blob: glbBlob, error: dlErr } = await rawStorageDownload('glb-models', variant.glb_path)
 
       if (dlErr || !glbBlob) {
         warnings.push(`Failed to load model for ${items[pf.furniture_item_id]?.name ?? 'item'}`)
@@ -366,10 +356,10 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
 
       model.scale.setScalar(scale)
       model.position.sub(modelCenter.multiplyScalar(scale))
-      model.position.x += pf.x
-      model.position.y += (modelSize.y * scale) / 2
-      model.position.z += pf.y
-      model.rotation.y = DIRECTION_ANGLES[pf.direction] ?? 0
+      model.position.x += pf.x_cm / 100
+      model.position.y += (modelSize.y * scale) / 2 + pf.y_cm / 100
+      model.position.z += pf.z_cm / 100
+      model.rotation.y = (pf.rotation_deg * Math.PI) / 180
 
       // Enable shadows on all child meshes
       model.traverse((child) => {

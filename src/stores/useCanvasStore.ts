@@ -1,17 +1,16 @@
 import { create } from 'zustand'
-import type { PlacedFurniture, Direction, RoomGeometry } from '@/types'
-import { supabase } from '@/lib/supabase'
+import type { PlacedFurniture, RoomGeometry } from '@/types'
+import type { RoomRotation } from '@/lib/roomGeometry'
+import { supabase, rawInsert, rawInsertMany, rawUpdate, rawDelete, rawDeleteWhere } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useProjectStore } from '@/stores/useProjectStore'
-
-const DIRECTIONS: Direction[] = ['front_left', 'front_right', 'back_right', 'back_left']
 
 // ── Undo/Redo Command Types ──────────────────────────────────────────────
 
 interface PlaceCommand { type: 'place'; item: PlacedFurniture }
 interface RemoveCommand { type: 'remove'; item: PlacedFurniture }
 interface MoveCommand { type: 'move'; itemId: string; prevX: number; prevY: number; nextX: number; nextY: number }
-interface RotateCommand { type: 'rotate'; itemId: string; prevDirection: Direction; nextDirection: Direction }
+interface RotateCommand { type: 'rotate'; itemId: string; prevRotationDeg: number; nextRotationDeg: number }
 interface ScaleCommand { type: 'scale'; itemId: string; prevScale: number; nextScale: number }
 interface SwitchVariantCommand { type: 'switchVariant'; itemId: string; prevVariantId: string; prevPrice: number | null; nextVariantId: string; nextPrice: number | null }
 interface GeometryCommand { type: 'geometry'; roomId: string; prevGeometry: RoomGeometry; nextGeometry: RoomGeometry; prevWidthCm: number; prevHeightCm: number; nextWidthCm: number; nextHeightCm: number }
@@ -27,7 +26,7 @@ interface CanvasState {
   placementMode: boolean
   placementItemId: string | null       // furniture_item_id to place
   placementVariantId: string | null    // default variant for placement
-  roomRotation: Direction
+  roomRotation: RoomRotation
   isDragging: boolean
   isPanning: boolean
 
@@ -56,7 +55,7 @@ interface CanvasState {
 
   loadPlacedFurniture: (roomId: string) => Promise<void>
   savePlacedFurniture: () => Promise<void>
-  placeItems: (items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x: number; y: number; direction: Direction }>) => Promise<void>
+  placeItems: (items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x_cm: number; z_cm: number; rotation_deg: number }>) => Promise<void>
   clearRoomFurniture: (roomId: string) => Promise<void>
 
   setPlacementMode: (active: boolean, itemId?: string, variantId?: string) => void
@@ -66,7 +65,12 @@ interface CanvasState {
   setSelectedItem: (id: string | null) => void
 
   moveItem: (id: string, roomX: number, roomY: number) => void
+  /** Increment rotation by 90° (legacy keyboard rotate) */
   rotateItem: (id: string) => void
+  /** Set rotation to a specific angle in degrees (0–360 normalized). Pushes one undo command per `commitRotation` call. */
+  setItemRotation: (id: string, deg: number) => void
+  /** Push an undo command after continuous rotation (e.g. scroll-wheel drag). */
+  commitRotation: (id: string, prevDeg: number) => void
   scaleItem: (id: string, scaleFactor: number) => void
   switchVariant: (id: string, variantId: string, price: number | null) => void
   removeItem: (id: string) => Promise<void>
@@ -77,7 +81,7 @@ interface CanvasState {
   undo: () => Promise<void>
   redo: () => Promise<void>
 
-  setRoomRotation: (direction: Direction) => void
+  setRoomRotation: (rotation: RoomRotation) => void
   setDragging: (val: boolean) => void
   setIsPanning: (val: boolean) => void
 
@@ -152,18 +156,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   savePlacedFurniture: async () => {
     const { placedFurniture } = get()
     for (const item of placedFurniture) {
-      const { error } = await supabase
-        .from('placed_furniture')
-        .update({
-          x: item.x,
-          y: item.y,
-          direction: item.direction,
-          selected_variant_id: item.selected_variant_id,
-          price_at_placement: item.price_at_placement,
-          scale_factor: item.scale_factor,
-          sort_order: item.sort_order,
-        })
-        .eq('id', item.id)
+      const { error } = await rawUpdate('placed_furniture', item.id, {
+        x_cm: item.x_cm,
+        y_cm: item.y_cm,
+        z_cm: item.z_cm,
+        rotation_deg: item.rotation_deg,
+        selected_variant_id: item.selected_variant_id,
+        price_at_placement: item.price_at_placement,
+        scale_factor: item.scale_factor,
+        sort_order: item.sort_order,
+      })
       if (error) console.error('savePlacedFurniture item error:', error)
     }
   },
@@ -179,32 +181,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         room_id: item.roomId,
         furniture_item_id: item.furnitureItemId,
         selected_variant_id: item.variantId,
-        x: item.x,
-        y: item.y,
-        direction: item.direction,
+        x_cm: item.x_cm,
+        y_cm: 0,
+        z_cm: item.z_cm,
+        rotation_deg: item.rotation_deg,
         price_at_placement: variant?.price_thb ?? null,
         sort_order: placedFurniture.length + i,
       }
     })
-    const { data, error } = await supabase
-      .from('placed_furniture')
-      .insert(rows)
-      .select()
-    if (error) {
+    const { data, error } = await rawInsertMany<PlacedFurniture>('placed_furniture', rows)
+    if (error || !data) {
       console.error('placeItems:', error)
       return
     }
     set((state) => ({
-      placedFurniture: [...state.placedFurniture, ...(data as PlacedFurniture[])],
+      placedFurniture: [...state.placedFurniture, ...data],
       ...CLEAR_HISTORY,
     }))
   },
 
   clearRoomFurniture: async (roomId) => {
-    const { error } = await supabase
-      .from('placed_furniture')
-      .delete()
-      .eq('room_id', roomId)
+    const { error } = await rawDeleteWhere('placed_furniture', `room_id=eq.${roomId}`)
     if (error) {
       console.error('clearRoomFurniture:', error)
       return
@@ -233,27 +230,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const variant = variants.find((v) => v.id === placementVariantId)
     const price = variant?.price_thb ?? null
 
-    const { data, error } = await supabase
-      .from('placed_furniture')
-      .insert({
-        room_id: roomId,
-        furniture_item_id: placementItemId,
-        selected_variant_id: placementVariantId,
-        x: roomX,
-        y: roomY,
-        direction: 'front_left' as Direction,
-        price_at_placement: price,
-        sort_order: placedFurniture.length,
-      })
-      .select()
-      .single()
+    // Use raw fetch to avoid Supabase client concurrency hang (CLAUDE.md #8)
+    const { data: placed, error } = await rawInsert<PlacedFurniture>('placed_furniture', {
+      room_id: roomId,
+      furniture_item_id: placementItemId,
+      selected_variant_id: placementVariantId,
+      x_cm: roomX,
+      y_cm: 0,
+      z_cm: roomY,
+      rotation_deg: 0,
+      price_at_placement: price,
+      sort_order: placedFurniture.length,
+    })
 
-    if (error) {
+    if (error || !placed) {
       console.error('placeItem:', error)
       return
     }
-
-    const placed = data as PlacedFurniture
     set((state) => ({
       placedFurniture: [...state.placedFurniture, placed],
       placementMode: false,
@@ -276,16 +269,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   moveItem: (id, roomX, roomY) => {
     set((state) => ({
       placedFurniture: state.placedFurniture.map((item) =>
-        item.id === id ? { ...item, x: roomX, y: roomY } : item
+        item.id === id ? { ...item, x_cm: roomX, z_cm: roomY } : item
       ),
     }))
-    supabase
-      .from('placed_furniture')
-      .update({ x: roomX, y: roomY })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) console.error('moveItem DB:', error)
-      })
+    rawUpdate('placed_furniture', id, { x_cm: roomX, z_cm: roomY }).then(({ error }) => {
+      if (error) console.error('moveItem DB:', error)
+    })
   },
 
   scaleItem: (id, scaleFactor) => {
@@ -295,33 +284,44 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ),
     }))
     useProjectStore.setState({ isDirty: true })
-    supabase
-      .from('placed_furniture')
-      .update({ scale_factor: scaleFactor })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) console.error('scaleItem DB:', error)
-      })
+    rawUpdate('placed_furniture', id, { scale_factor: scaleFactor }).then(({ error }) => {
+      if (error) console.error('scaleItem DB:', error)
+    })
   },
 
   rotateItem: (id) => {
     const item = get().placedFurniture.find((i) => i.id === id)
     if (!item) return
-    const prevDir = item.direction
-    const nextDir = DIRECTIONS[(DIRECTIONS.indexOf(prevDir) + 1) % 4]
+    const prevRot = item.rotation_deg
+    const nextRot = (prevRot + 90) % 360
     set((state) => ({
       placedFurniture: state.placedFurniture.map((i) =>
-        i.id === id ? { ...i, direction: nextDir } : i
+        i.id === id ? { ...i, rotation_deg: nextRot } : i
       ),
     }))
-    supabase
-      .from('placed_furniture')
-      .update({ direction: nextDir })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) console.error('rotateItem DB:', error)
-      })
-    pushCommand(set, get, { type: 'rotate', itemId: id, prevDirection: prevDir, nextDirection: nextDir })
+    rawUpdate('placed_furniture', id, { rotation_deg: nextRot }).then(({ error }) => {
+      if (error) console.error('rotateItem DB:', error)
+    })
+    pushCommand(set, get, { type: 'rotate', itemId: id, prevRotationDeg: prevRot, nextRotationDeg: nextRot })
+  },
+
+  setItemRotation: (id, deg) => {
+    // Normalize to [0, 360)
+    const normalized = ((deg % 360) + 360) % 360
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, rotation_deg: normalized } : i
+      ),
+    }))
+    rawUpdate('placed_furniture', id, { rotation_deg: normalized }).then(({ error }) => {
+      if (error) console.error('setItemRotation DB:', error)
+    })
+  },
+
+  commitRotation: (id, prevDeg) => {
+    const item = get().placedFurniture.find((i) => i.id === id)
+    if (!item || item.rotation_deg === prevDeg) return
+    pushCommand(set, get, { type: 'rotate', itemId: id, prevRotationDeg: prevDeg, nextRotationDeg: item.rotation_deg })
   },
 
   switchVariant: (id, variantId, price) => {
@@ -336,13 +336,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           : i
       ),
     }))
-    supabase
-      .from('placed_furniture')
-      .update({ selected_variant_id: variantId, price_at_placement: price })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) console.error('switchVariant DB:', error)
-      })
+    rawUpdate('placed_furniture', id, { selected_variant_id: variantId, price_at_placement: price }).then(({ error }) => {
+      if (error) console.error('switchVariant DB:', error)
+    })
     pushCommand(set, get, { type: 'switchVariant', itemId: id, prevVariantId, prevPrice, nextVariantId: variantId, nextPrice: price })
   },
 
@@ -350,7 +346,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const item = get().placedFurniture.find((i) => i.id === id)
     if (!item) return
     const snapshot = { ...item }
-    const { error } = await supabase.from('placed_furniture').delete().eq('id', id)
+    const { error } = await rawDelete('placed_furniture', id)
     if (error) {
       console.error('removeItem:', error)
       return
@@ -366,8 +362,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   commitMove: (id, prevX, prevY) => {
     const item = get().placedFurniture.find((i) => i.id === id)
-    if (!item || (item.x === prevX && item.y === prevY)) return
-    pushCommand(set, get, { type: 'move', itemId: id, prevX, prevY, nextX: item.x, nextY: item.y })
+    if (!item || (item.x_cm === prevX && item.z_cm === prevY)) return
+    pushCommand(set, get, { type: 'move', itemId: id, prevX, prevY, nextX: item.x_cm, nextY: item.z_cm })
   },
 
   commitScale: (id, prevScale) => {
@@ -396,7 +392,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     try {
       switch (cmd.type) {
         case 'place': {
-          await supabase.from('placed_furniture').delete().eq('id', cmd.item.id)
+          await rawDelete('placed_furniture', cmd.item.id)
           set((s) => ({
             placedFurniture: s.placedFurniture.filter((i) => i.id !== cmd.item.id),
             selectedItemId: s.selectedItemId === cmd.item.id ? null : s.selectedItemId,
@@ -405,9 +401,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
         case 'remove': {
           const { id: _oldId, created_at: _ca, ...insertData } = cmd.item
-          const { data, error } = await supabase.from('placed_furniture').insert(insertData).select().single()
+          const { data, error } = await rawInsert<PlacedFurniture>('placed_furniture', insertData)
           if (error || !data) { console.error('undo remove:', error); return }
-          cmd.item = data as PlacedFurniture
+          cmd.item = data
           set((s) => ({
             placedFurniture: [...s.placedFurniture, cmd.item],
             selectedItemId: cmd.item.id,
@@ -416,30 +412,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
         case 'move': {
           set((s) => ({
-            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, x: cmd.prevX, y: cmd.prevY } : i),
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, x_cm: cmd.prevX, z_cm: cmd.prevY } : i),
           }))
-          supabase.from('placed_furniture').update({ x: cmd.prevX, y: cmd.prevY }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('undo move DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { x_cm: cmd.prevX, z_cm: cmd.prevY }).then(({ error }) => { if (error) console.error('undo move DB:', error) })
           break
         }
         case 'rotate': {
           set((s) => ({
-            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, direction: cmd.prevDirection } : i),
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, rotation_deg: cmd.prevRotationDeg } : i),
           }))
-          supabase.from('placed_furniture').update({ direction: cmd.prevDirection }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('undo rotate DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { rotation_deg: cmd.prevRotationDeg }).then(({ error }) => { if (error) console.error('undo rotate DB:', error) })
           break
         }
         case 'scale': {
           set((s) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, scale_factor: cmd.prevScale } : i),
           }))
-          supabase.from('placed_furniture').update({ scale_factor: cmd.prevScale }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('undo scale DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { scale_factor: cmd.prevScale }).then(({ error }) => { if (error) console.error('undo scale DB:', error) })
           break
         }
         case 'switchVariant': {
           set((s) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice } : i),
           }))
-          supabase.from('placed_furniture').update({ selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('undo switchVariant DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice }).then(({ error }) => { if (error) console.error('undo switchVariant DB:', error) })
           break
         }
         case 'geometry': {
@@ -468,9 +464,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       switch (cmd.type) {
         case 'place': {
           const { id: _oldId, created_at: _ca, ...insertData } = cmd.item
-          const { data, error } = await supabase.from('placed_furniture').insert(insertData).select().single()
+          const { data, error } = await rawInsert<PlacedFurniture>('placed_furniture', insertData)
           if (error || !data) { console.error('redo place:', error); return }
-          cmd.item = data as PlacedFurniture
+          cmd.item = data
           set((s) => ({
             placedFurniture: [...s.placedFurniture, cmd.item],
             selectedItemId: cmd.item.id,
@@ -478,7 +474,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           break
         }
         case 'remove': {
-          await supabase.from('placed_furniture').delete().eq('id', cmd.item.id)
+          await rawDelete('placed_furniture', cmd.item.id)
           set((s) => ({
             placedFurniture: s.placedFurniture.filter((i) => i.id !== cmd.item.id),
             selectedItemId: s.selectedItemId === cmd.item.id ? null : s.selectedItemId,
@@ -487,30 +483,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
         case 'move': {
           set((s) => ({
-            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, x: cmd.nextX, y: cmd.nextY } : i),
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, x_cm: cmd.nextX, z_cm: cmd.nextY } : i),
           }))
-          supabase.from('placed_furniture').update({ x: cmd.nextX, y: cmd.nextY }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('redo move DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { x_cm: cmd.nextX, z_cm: cmd.nextY }).then(({ error }) => { if (error) console.error('redo move DB:', error) })
           break
         }
         case 'rotate': {
           set((s) => ({
-            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, direction: cmd.nextDirection } : i),
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, rotation_deg: cmd.nextRotationDeg } : i),
           }))
-          supabase.from('placed_furniture').update({ direction: cmd.nextDirection }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('redo rotate DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { rotation_deg: cmd.nextRotationDeg }).then(({ error }) => { if (error) console.error('redo rotate DB:', error) })
           break
         }
         case 'scale': {
           set((s) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, scale_factor: cmd.nextScale } : i),
           }))
-          supabase.from('placed_furniture').update({ scale_factor: cmd.nextScale }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('redo scale DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { scale_factor: cmd.nextScale }).then(({ error }) => { if (error) console.error('redo scale DB:', error) })
           break
         }
         case 'switchVariant': {
           set((s) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice } : i),
           }))
-          supabase.from('placed_furniture').update({ selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice }).eq('id', cmd.itemId).then(({ error }) => { if (error) console.error('redo switchVariant DB:', error) })
+          rawUpdate('placed_furniture', cmd.itemId, { selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice }).then(({ error }) => { if (error) console.error('redo switchVariant DB:', error) })
           break
         }
         case 'geometry': {

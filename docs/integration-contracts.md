@@ -21,12 +21,11 @@
 |---|---|---|---|
 | 1 | Supabase Auth | Client (browser) | User login/logout |
 | 2 | Supabase Storage | Client + Edge Functions | Image uploads, sprite storage, .glb storage |
-| 3 | Product Link Scraping | Supabase Edge Function | Designer submits a product link |
-| 4 | rembg (Background Removal) | Supabase Edge Function | After scrape succeeds, for each uploaded variant image |
-| 5 | Replicate API — TRELLIS | Supabase Edge Function | After designer approves a clean image |
-| 6 | Three.js Sprite Rendering | Client (browser) | After TRELLIS returns a .glb file |
-| 7 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
-| 8 | Room Perspective Preview | Supabase Edge Function or render service | Designer clicks "Preview Room" |
+| 3 | Product Screenshot Extraction | Supabase Edge Function (Claude Vision) | Designer uploads a product page screenshot |
+| 4 | Replicate API — TRELLIS | Supabase Edge Function | Variant created (non-flat items). Multi-image input. |
+| 5 | Three.js Sprite Rendering | Client (browser) | After TRELLIS returns a .glb file |
+| 6 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
+| 7 | Room Perspective Preview | Client (browser, Three.js) | Designer clicks "Preview Room" |
 
 ---
 
@@ -55,16 +54,15 @@
 
 | Bucket | Contents | Access |
 |---|---|---|
-| `original-images` | Designer-uploaded product photos (before rembg) | Authenticated users |
-| `clean-images` | Background-removed images (after rembg) | Authenticated users |
-| `glb-models` | TRELLIS-generated .glb 3D model files | Authenticated users |
+| `original-images` | Designer-uploaded product photos (1+ per variant, stored as `original_image_urls[]`) | Authenticated users |
+| `glb-models` | TRELLIS-generated .glb 3D model files (not produced for flat items) | Authenticated users |
 | `sprites` | Rendered isometric sprite images (4 per variant) | Public (for canvas rendering performance) |
 | `textures` | Designer-uploaded custom finish textures | Authenticated users |
 | `thumbnails` | Project thumbnail previews | Authenticated users |
 
 **Send:** File binary + target path
 **Get back:** Public URL or signed URL
-**Where it goes:** URL stored in the relevant `furniture_variants` column (`original_image_url`, `clean_image_url`, `glb_path`) or `furniture_sprites.image_path`
+**Where it goes:** URLs appended to `furniture_variants.original_image_urls[]` (for source photos), stored in `furniture_variants.glb_path` (for .glb files), or `furniture_sprites.image_path` (for sprites).
 **Error handling:** Retry upload once. On persistent failure, set relevant status to `failed` and notify the designer via toast.
 
 ---
@@ -103,30 +101,11 @@
 
 ---
 
-## 4. rembg (Background Removal)
+## 4. Replicate API — TRELLIS (Multi-Image)
 
-**Purpose:** Remove background from a product photo, producing a clean transparent-background image.
+**Purpose:** Generate a 3D model (.glb) from one or more designer-uploaded product photos. TRELLIS does its own internal background removal — there is no separate rembg step.
 
-**Triggered by:** Designer uploads a color variant image.
-
-**Send:** Original product photo (PNG/JPEG from Supabase Storage)
-**Get back:** Clean image with transparent background (PNG)
-**Where it goes:**
-- Image saved to `clean-images` bucket in Supabase Storage
-- `furniture_variants.clean_image_url` updated with the storage path
-- `furniture_variants.image_status` updated: `processing` → `pending_approval`
-
-**Error handling:** On failure, set `image_status` to `processing` (retry) or notify designer to upload a different photo. Do not proceed to TRELLIS.
-
-**Hard gate:** After rembg completes, the designer MUST review and approve the clean image before the pipeline continues. See product-spec.md user story #14.
-
----
-
-## 5. Replicate API — TRELLIS
-
-**Purpose:** Generate a 3D model (.glb) from a background-removed product photo.
-
-**Triggered by:** Designer approves a clean image (`image_status` → `approved`).
+**Triggered by:** Variant row is created with at least one image in `original_image_urls[]` AND the item is not flat (neither `categories.is_flat` nor `items.is_flat_override` is true). For flat items this step is skipped entirely — see "Flat-item bypass" below.
 
 **API endpoint:** Replicate API (`firtoz/trellis` model)
 
@@ -134,35 +113,39 @@
 
 | Parameter | Value |
 |---|---|
-| `image` | Clean image URL (from Supabase Storage `clean-images` bucket) |
-| `texture_size` | 1024 (default — balance of quality and speed) |
-| `mesh_simplify` | 0.95 (default) |
+| `images` | Array of signed URLs for each file in `original_image_urls[]` (Supabase Storage signed URLs, 10 min TTL) |
+| `texture_size` | 1024 |
+| `mesh_simplify` | 0.95 |
 | `generate_model` | true |
+
+**Why multi-image:** Multi-image input is the single biggest lever on .glb quality. Designers are encouraged to upload 2–4 clean product-page angle shots (front, 3/4, side) when available. For messy source photos, the recommended pre-processing is Nano Banana (Google Gemini) — see `designer-workflow.md`.
 
 **Get back:** .glb file (3D model with textures)
 
 **Where it goes:**
 - .glb file saved to `glb-models` bucket in Supabase Storage
 - `furniture_variants.glb_path` updated with the storage path
-- `furniture_variants.render_status` updated: `waiting` → `processing`
-- Pipeline continues to Three.js rendering (step 6)
+- `furniture_variants.render_status` stays `processing` until sprite rendering (step 5) completes
+- Designer reviews the .glb via `ModelApprovalModal` and sets `render_approval_status` to `approved` / `rejected`; `retryRender` re-runs this step with the same images.
 
-**Cost:** ~$0.05 per run
+**Cost:** ~$0.05 per run (single call regardless of image count)
 
 **Error handling:**
-- Replicate API timeout → retry once
-- Model generation fails → set `render_status` to `failed`, notify designer
-- Do NOT auto-retry more than once — bad input images won't produce better results on retry
+- Replicate API timeout → mark `render_status='failed'`; designer can retry via `retryRender`.
+- Model generation fails → `render_status='failed'`.
+- Designer rejects the .glb → `render_approval_status='rejected'`; designer can re-upload better photos and retry (no auto-retry on the same images).
+
+**Flat-item bypass:** When the effective `is_flat` is true, the variant skips this step entirely. `render_status` is set to `completed` and `render_approval_status` to `approved` at variant creation time. The first uploaded image serves as the canvas asset; no .glb is produced, no TRELLIS cost is incurred.
 
 ---
 
-## 6. Three.js Sprite Rendering (Client-Side)
+## 5. Three.js Sprite Rendering (Client-Side)
 
 **Purpose:** Render 4 isometric sprite images from a .glb 3D model file.
 
 **Runs on:** Client-side (browser) — implemented in `src/lib/renderSprites.ts`
 
-**Triggered by:** `generate-3d-model` Edge Function returns successfully. The client's `approveImage` flow calls `renderSprites()` after confirming `glb_path` is set.
+**Triggered by:** `generate-3d-model` Edge Function returns successfully. The catalog store's `runRenderPipeline` calls `renderSprites()` after confirming `glb_path` is set. Not run for flat items.
 
 **Send:** variant ID + .glb file path from Supabase Storage
 **Process:**
@@ -202,7 +185,7 @@
 
 ---
 
-## 7. Daily Link Recheck
+## 6. Daily Link Recheck
 
 **Purpose:** Verify that product source URLs are still active and prices haven't changed significantly.
 
@@ -231,7 +214,7 @@
 
 ---
 
-## 8. Room Perspective Preview
+## 7. Room Perspective Preview
 
 **Purpose:** Render eye-level interior vignettes — realistic 3D perspective images of the current room, showing all placed furniture, room geometry (walls with door/window cutouts), and finishes. User can select which wall to view from via wall selector buttons. Used for client presentations.
 
@@ -275,28 +258,34 @@
 
 ## Pipeline Summary
 
-The full flow from "designer pastes a link" to "sprites ready on canvas":
+The full flow from "designer uploads screenshot" to "3D model approved":
 
 ```
-Designer pastes link
+Designer uploads product screenshot + details
   │
   ▼
-[3. Scrape] ──── text data ────► furniture_items + furniture_variants
+[3. Extract] ── text data ──► furniture_items
   │
-  │  Designer uploads variant images
+  │  Designer uploads 1+ product photos per variant
   ▼
-[4. rembg] ──── clean image ────► Supabase Storage + variant.clean_image_url
+furniture_variants created with original_image_urls[]
   │
-  │  Designer approves clean image (HARD GATE)
-  ▼
-[5. TRELLIS] ──── .glb file ────► Supabase Storage + variant.glb_path
+  ├──── is_flat? ────► skip TRELLIS:
+  │                    render_status=completed,
+  │                    render_approval_status=approved,
+  │                    first image serves as canvas asset
+  │
+  ▼ (non-flat items)
+[4. TRELLIS] ── multi-image → .glb ──► Supabase Storage + variant.glb_path
   │
   ▼
-[6. Three.js] ──── 4 sprites ────► Supabase Storage + furniture_sprites rows
-  │
+[5. Three.js] ── 4 sprites ──► Supabase Storage + furniture_sprites rows
+  │                             variant.render_status = completed
   ▼
-variant.render_status = completed
-Sprites replace placeholder on canvas
+Designer reviews .glb in ModelApprovalModal:
+  - Approve: render_approval_status=approved
+  - Reject:  render_approval_status=rejected
+  - Retry:   re-run TRELLIS with same images
 ```
 
-Each step is independent and async. Failure at any step does not block previous steps. The designer can use the item on canvas with the original photo at any point after uploading.
+The approval gate does not block canvas placement — the first uploaded photo serves as a placeholder while the pipeline runs, and the item is usable even if approval stays pending. The badge is purely a quality signal.

@@ -3,6 +3,17 @@ import { create } from 'zustand'
 export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'templates'
 type RightPanelTab = 'properties' | 'cost'
 
+const CANVAS_GRID_LS_KEY = 'leanovate.canvasGrid'
+
+function readInitialGrid(): boolean {
+  try {
+    const stored = localStorage.getItem(CANVAS_GRID_LS_KEY)
+    return stored === 'true'
+  } catch {
+    return false
+  }
+}
+
 interface UIState {
   // Sidebar
   sidebarTab: SidebarTab
@@ -11,6 +22,10 @@ interface UIState {
   // Right panel
   rightPanelTab: RightPanelTab
   setRightPanelTab: (tab: RightPanelTab) => void
+
+  // Canvas grid visibility (toggleable, persisted to localStorage)
+  canvasGrid: boolean
+  setCanvasGrid: (on: boolean) => void
 
   // Modals
   activeModal: string | null
@@ -29,6 +44,12 @@ export const useUIStore = create<UIState>((set) => ({
 
   rightPanelTab: 'properties',
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+
+  canvasGrid: readInitialGrid(),
+  setCanvasGrid: (on) => {
+    set({ canvasGrid: on })
+    try { localStorage.setItem(CANVAS_GRID_LS_KEY, String(on)) } catch { /* ignore quota errors */ }
+  },
 
   activeModal: null,
   openModal: (id) => set({ activeModal: id }),
