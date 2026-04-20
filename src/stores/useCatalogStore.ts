@@ -10,6 +10,7 @@ import type {
 } from '@/types'
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { renderVariantThumbnail } from '@/lib/renderVariantThumbnail'
 
 // ── Raw fetch helper for edge functions ─────────────────────────────────────
 // Bypasses the Supabase JS client to avoid concurrency hangs (see CLAUDE.md #8)
@@ -127,6 +128,13 @@ interface CatalogState {
   rejectRender: (variantId: string) => Promise<{ error: string | null }>
   /** Re-run TRELLIS for an existing variant (e.g. after re-upload). */
   retryRender: (variantId: string) => Promise<{ error: string | null }>
+  /**
+   * Lazily backfill a catalog tile thumbnail for a variant that has a .glb
+   * but no `thumbnail_path` yet (legacy data or approveRender's
+   * fire-and-forget snapshot hasn't completed). Safe to call repeatedly —
+   * no-ops if the variant already has a thumbnail or has no .glb.
+   */
+  ensureVariantThumbnail: (variantId: string) => Promise<void>
 
   // ─ Catalog approval flow ─────────────────────────────────────────────────
   submitItemForReview: (itemId: string) => Promise<void>
@@ -250,7 +258,9 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     const { data: row, error } = await rawInsert<FurnitureItem>('furniture_items', {
       name: data.name,
       category_id: data.category_id,
-      source_url: data.source_url || 'manual',
+      // Null for wall fixtures (no purchase link). Floor items that were added
+      // without a link still get 'manual' so source_domain lookups don't break.
+      source_url: data.source_url || null,
       source_domain: data.source_domain || 'manual',
       description: data.description ?? null,
       width_cm: data.width_cm ?? null,
@@ -408,6 +418,14 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
     if (error) return { error }
     set((state) => ({ variants: mapVariant(state.variants, variantId, { render_approval_status: 'approved' as RenderApprovalStatus }) }))
+
+    // Fire-and-forget: render the Sims-style catalog tile thumbnail from the
+    // .glb and cache it. Never block the approve action on this — a failed
+    // snapshot just falls back to the original product photo in the tile.
+    runThumbnailBackfill(variantId).catch((err) =>
+      console.warn('[approveRender] thumbnail backfill failed:', err)
+    )
+
     return { error: null }
   },
 
@@ -437,6 +455,10 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     }))
     runRenderPipeline(variantId).catch((err) => console.warn('[retryRender]', err))
     return { error: null }
+  },
+
+  ensureVariantThumbnail: async (variantId) => {
+    await runThumbnailBackfill(variantId)
   },
 
   // ─── Catalog approval ──────────────────────────────────────────────────────
@@ -586,4 +608,65 @@ async function runRenderPipeline(variantId: string): Promise<void> {
   }
 
   patch({ glb_path: glbPath, render_status: 'completed' as RenderStatus })
+
+  // Kick off the tile snapshot as soon as the .glb is available — even before
+  // designer approval — so the catalog has a real thumbnail the moment the
+  // render gate clears. Failures are silent; the tile just uses the original
+  // photo fallback.
+  runThumbnailBackfill(variantId).catch((err) =>
+    console.warn('[runRenderPipeline] thumbnail backfill failed:', err)
+  )
+}
+
+// ── Thumbnail backfill ──────────────────────────────────────────────────────
+//
+// Shared worker that renders + uploads a variant tile thumbnail and patches
+// `thumbnail_path` on the row + in-memory state. Deduplicates concurrent
+// calls per variant so rapid re-renders (polling + approve + mount) don't
+// spin up multiple WebGL contexts for the same variant.
+
+const thumbnailInFlight = new Map<string, Promise<void>>()
+
+function runThumbnailBackfill(variantId: string): Promise<void> {
+  const existing = thumbnailInFlight.get(variantId)
+  if (existing) return existing
+
+  const task = (async () => {
+    // Locate the variant across the item-keyed map.
+    const state = useCatalogStore.getState()
+    let variant: FurnitureVariant | null = null
+    for (const list of Object.values(state.variants)) {
+      const hit = list.find((v) => v.id === variantId)
+      if (hit) { variant = hit; break }
+    }
+
+    // No-op if the variant isn't loaded locally, has no .glb (flat or still
+    // generating), or already has a cached thumbnail.
+    if (!variant) return
+    if (!variant.glb_path) return
+    if (variant.thumbnail_path) return
+
+    const { path, error } = await renderVariantThumbnail(variantId, variant.glb_path)
+    if (error || !path) {
+      console.warn(`[runThumbnailBackfill] ${variantId}:`, error)
+      return
+    }
+
+    const { error: dbErr } = await rawUpdate('furniture_variants', variantId, {
+      thumbnail_path: path,
+    })
+    if (dbErr) {
+      console.warn(`[runThumbnailBackfill] db update failed for ${variantId}:`, dbErr)
+      return
+    }
+
+    useCatalogStore.setState((s) => ({
+      variants: mapVariant(s.variants, variantId, { thumbnail_path: path }),
+    }))
+  })().finally(() => {
+    thumbnailInFlight.delete(variantId)
+  })
+
+  thumbnailInFlight.set(variantId, task)
+  return task
 }

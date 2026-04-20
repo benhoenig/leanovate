@@ -14,6 +14,7 @@ export type BlockSize = 'big' | 'small'
 export type ProjectStatus = 'draft' | 'completed'
 export type FinishType = 'wall' | 'floor' | 'door' | 'window' | 'lighting'
 export type CurtainStyle = 'none' | 'open' | 'closed'
+export type MountType = 'floor' | 'wall'
 
 // --- Auth & Team ---
 
@@ -64,6 +65,8 @@ export interface RoomDoor {
   position: number    // 0-1 along the wall segment
   width_m: number     // width in metres (default 0.8)
   height_m?: number   // height from floor in metres (default ~ceiling×0.82)
+  /** Catalog variant this fixture renders. Null → fall back to generic panel. */
+  variant_id?: string | null
   wall?: PhysicalWall // DEPRECATED: kept for backward compat migration
 }
 
@@ -76,6 +79,8 @@ export interface RoomWindow {
   sill_m?: number     // sill height from floor in metres (default ~ceiling×0.30)
   curtain_style?: CurtainStyle  // default 'none'
   curtain_color?: string        // hex string e.g. '#F5F0E8', default linen
+  /** Catalog variant this fixture renders. Null → fall back to generic frame+glass. */
+  variant_id?: string | null
   wall?: PhysicalWall // DEPRECATED: kept for backward compat migration
 }
 
@@ -110,6 +115,8 @@ export interface FurnitureCategory {
   sort_order: number
   is_flat: boolean
   default_block_size: BlockSize
+  /** 'floor' = normal furniture (X/Z grid placement); 'wall' = door/window (wall-attached). */
+  mount_type: MountType
 }
 
 export interface Style {
@@ -122,7 +129,8 @@ export interface FurnitureItem {
   id: string
   name: string
   category_id: string
-  source_url: string
+  /** Null for wall fixtures (no purchase link). */
+  source_url: string | null
   source_domain: string
   width_cm: number | null
   depth_cm: number | null
@@ -149,6 +157,8 @@ export interface FurnitureVariant {
   height_cm: number | null
   original_image_urls: string[]
   glb_path: string | null
+  /** Cached isometric snapshot of the .glb, shown as the catalog tile image. Null for flat items or legacy/unrendered. */
+  thumbnail_path: string | null
   render_status: RenderStatus
   render_approval_status: RenderApprovalStatus
   link_status: LinkStatus
