@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
@@ -26,7 +27,7 @@ import {
   createFurnitureGroup,
   disposeSceneObjects,
 } from '@/lib/roomScene'
-import { getVertices, polygonCentroid, pointInPolygon, nearestPointOnPolygon } from '@/lib/roomGeometry'
+import { getVertices, polygonCentroid, pointInPolygon, nearestPointOnPolygon, nearestWallSnap } from '@/lib/roomGeometry'
 import { blockStepCm } from '@/lib/blockGrid'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -54,7 +55,35 @@ function snapCm(valCm: number, stepCm: number, bypass: boolean): number {
   return Math.round(valCm / stepCm) * stepCm
 }
 
+/**
+ * Resolve physical dimensions (width + height in metres) for a fixture
+ * during placement. Falls back to sensible defaults when no variant is
+ * picked (generic fallback fixture).
+ */
+function getFixtureDims(
+  itemId: string | null,
+  variantId: string | null,
+  type: 'door' | 'window' | null,
+): { widthM: number; heightM: number } {
+  const defaults = type === 'door'
+    ? { widthM: 0.8, heightM: 2.1 }
+    : { widthM: 1.2, heightM: 1.2 }
+  if (!itemId) return defaults
+  const catalog = useCatalogStore.getState()
+  const item = catalog.items.find((i) => i.id === itemId)
+  if (!item) return defaults
+  const variants = catalog.variants[itemId] ?? []
+  const variant = variantId ? variants.find((v) => v.id === variantId) : undefined
+  const widthCm = variant?.width_cm ?? item.width_cm ?? null
+  const heightCm = variant?.height_cm ?? item.height_cm ?? null
+  return {
+    widthM: widthCm != null ? widthCm / 100 : defaults.widthM,
+    heightM: heightCm != null ? heightCm / 100 : defaults.heightM,
+  }
+}
+
 export default function RoomCanvas({ room, finishMaterials }: Props) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
@@ -69,6 +98,14 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   /** Shell group — rebuilt when geometry/finishes change. Parent for floor+walls+ceiling+lights. */
   const shellGroupRef = useRef<THREE.Group | null>(null)
   const floorMeshRef = useRef<THREE.Mesh | null>(null)
+  /**
+   * Ceiling mesh ref so the animate loop can reveal it whenever the orbit
+   * camera tilts low enough that its eye dips below ceiling height — makes
+   * the room read as enclosed in corner/low-angle views. Hidden by default
+   * in design mode (dollhouse). Roam mode keeps it always visible via the
+   * shell's `mode: 'full'` build.
+   */
+  const ceilingMeshRef = useRef<THREE.Mesh | null>(null)
   /** Persistent across shell rebuilds. */
   const furnitureLayerRef = useRef<THREE.Group | null>(null)
   /** Persistent across shell rebuilds. Holds vertex + midpoint drag handles. */
@@ -81,6 +118,10 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   const furnitureSignaturesRef = useRef<Map<string, string>>(new Map())
   const selectionRingRef = useRef<THREE.Mesh | null>(null)
   const ghostGroupRef = useRef<THREE.Group | null>(null)
+  /** Translucent indicator shown while placing a door/window — snaps to the nearest wall. */
+  const fixtureGhostRef = useRef<THREE.Mesh | null>(null)
+  /** Container for per-wall cm length labels shown in Edit Shape mode. */
+  const dimLabelsRef = useRef<HTMLDivElement>(null)
   /** Room ID the camera was last framed for — avoid re-framing on every geometry tweak. */
   const framedRoomIdRef = useRef<string | null>(null)
   /** Vertex-drag state for edit shape mode. */
@@ -306,12 +347,86 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         }
       }
 
+      // Design-mode ceiling reveal: dollhouse hides the ceiling by default
+      // so the designer can orbit around the outside and see in. But when
+      // the orbit camera tilts low enough that its eye dips below the
+      // ceiling height, we're effectively looking at a corner view from
+      // inside the room — show the ceiling so the space reads as enclosed.
+      // Roam mode never hits this branch (shell builds ceiling visible).
+      if (mode === 'design' && ceilingMeshRef.current) {
+        const ceilingH = ceilingMeshRef.current.position.y
+        ceilingMeshRef.current.visible = camera.position.y < ceilingH
+      }
+
       if (sceneRef.current && cameraRef.current && rendererRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current)
       }
+
+      updateDimLabels()
+
       animationIdRef.current = requestAnimationFrame(animate)
     }
     animate()
+
+    /**
+     * Update per-wall cm length labels overlay. Only visible while
+     * shape-edit mode is on (and we're in design mode — hide in roam).
+     * Reads the live room geometry from the project store so labels
+     * stay in sync with wall push/pull during drags.
+     */
+    function updateDimLabels() {
+      const layer = dimLabelsRef.current
+      if (!layer) return
+      const show =
+        useCanvasStore.getState().shapeEditMode &&
+        useUIStore.getState().cameraMode === 'design'
+      if (!show) {
+        if (layer.childElementCount > 0) layer.replaceChildren()
+        return
+      }
+
+      const cam = cameraRef.current
+      const cont = containerRef.current
+      const room0 = useProjectStore.getState().rooms.find((r) => r.id === room.id)
+      if (!cam || !cont || !room0) return
+
+      const verts = getVertices(room0)
+      const N = verts.length
+
+      // Reconcile child count with wall count
+      while (layer.childElementCount < N) {
+        const div = document.createElement('div')
+        div.className = 'wall-dim-label'
+        layer.appendChild(div)
+      }
+      while (layer.childElementCount > N) {
+        layer.removeChild(layer.lastChild!)
+      }
+
+      const w = cont.clientWidth
+      const h = cont.clientHeight
+      const tmp = new THREE.Vector3()
+      for (let i = 0; i < N; i++) {
+        const a = verts[i]
+        const b = verts[(i + 1) % N]
+        const du = b.u - a.u, dv = b.v - a.v
+        const lengthCm = Math.round(Math.hypot(du, dv) * 100)
+        // Lift the label slightly above the floor so it reads clearly
+        tmp.set((a.u + b.u) / 2, 0.05, (a.v + b.v) / 2)
+        tmp.project(cam)
+        const el = layer.children[i] as HTMLDivElement
+        // Behind the camera: hide
+        if (tmp.z < -1 || tmp.z > 1) {
+          el.style.display = 'none'
+          continue
+        }
+        const sx = (tmp.x * 0.5 + 0.5) * w
+        const sy = (-tmp.y * 0.5 + 0.5) * h
+        el.style.display = 'block'
+        el.style.transform = `translate(-50%, -50%) translate(${sx}px, ${sy}px)`
+        el.textContent = `${lengthCm} cm`
+      }
+    }
 
     const resizeObserver = new ResizeObserver(() => {
       if (!rendererRef.current || !cameraRef.current || !container) return
@@ -350,8 +465,30 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   }, [])
 
   // ── Rebuild shell (floor / walls / ceiling / lights) ──────────────────────
-  // Depends on: room geometry, finishes, AND camera mode (dollhouse vs full).
+  // Depends on: room geometry, finishes, camera mode, AND any change to a
+  // variant referenced by a fixture (so the shell re-renders .glb inside the
+  // cutout when TRELLIS finishes or the designer swaps styles).
   const shellModeCameraMode = useUIStore((s) => s.cameraMode)
+  // Build a stable key from all fixture variant_ids + their render/glb state.
+  // When that key changes, rebuild the shell to pull in the latest .glb.
+  const fixtureVariantSignature = useCatalogStore((s) => {
+    const doors = room.geometry?.doors ?? []
+    const windows = room.geometry?.windows ?? []
+    const ids = [
+      ...doors.map((d) => d.variant_id).filter(Boolean),
+      ...windows.map((w) => w.variant_id).filter(Boolean),
+    ] as string[]
+    if (ids.length === 0) return 'none'
+    const parts: string[] = []
+    for (const list of Object.values(s.variants)) {
+      for (const v of list) {
+        if (ids.includes(v.id)) {
+          parts.push(`${v.id}:${v.render_status}:${v.glb_path ?? ''}`)
+        }
+      }
+    }
+    return parts.sort().join('|')
+  })
   useEffect(() => {
     const shellGroup = shellGroupRef.current
     if (!shellGroup || !cameraRef.current || !controlsRef.current) return
@@ -364,9 +501,20 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     // Roam mode: walls + ceiling solid (you're inside the room, presenting).
     // Design mode: dollhouse — camera is outside, walls facing camera cull.
     const shellMode = shellModeCameraMode === 'roam' ? 'full' : 'dollhouse'
-    const shell = buildRoomShell(shellGroup, room, finishMaterials, { mode: shellMode })
+    const shell = buildRoomShell(shellGroup, room, finishMaterials, {
+      mode: shellMode,
+      resolveVariant: (variantId) => {
+        const catalog = useCatalogStore.getState()
+        for (const list of Object.values(catalog.variants)) {
+          const found = list.find((v) => v.id === variantId)
+          if (found) return found
+        }
+        return undefined
+      },
+    })
     addStandardLighting(shellGroup, room)
     floorMeshRef.current = shell.floorMesh
+    ceilingMeshRef.current = shell.ceilingMesh
 
     // Only frame the camera when switching to a different room — preserve pose
     // during geometry edits so vertex drag doesn't yank the camera.
@@ -392,7 +540,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       controlsRef.current.update()
       framedRoomIdRef.current = room.id
     }
-  }, [room, finishMaterials, shellModeCameraMode])
+  }, [room, finishMaterials, shellModeCameraMode, fixtureVariantSignature])
 
   // ── Furniture rendering: sync placedFurniture ↔ scene graph ─────────────────
   useEffect(() => {
@@ -624,6 +772,62 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
   }, [room.id])
 
+  // ── Fixture placement ghost ─────────────────────────────────────────────────
+  // Shows a translucent panel on the nearest wall while the user is placing a
+  // door or window. Size comes from the selected variant's dimensions.
+  useEffect(() => {
+    const sync = () => {
+      const scene = sceneRef.current
+      if (!scene) return
+
+      // Clear existing fixture ghost
+      if (fixtureGhostRef.current) {
+        scene.remove(fixtureGhostRef.current)
+        fixtureGhostRef.current.geometry?.dispose()
+        const m = fixtureGhostRef.current.material
+        if (Array.isArray(m)) { for (const x of m) x.dispose() }
+        else if (m) (m as THREE.Material).dispose()
+        fixtureGhostRef.current = null
+      }
+
+      const s = useCanvasStore.getState()
+      if (!s.fixturePlacementType) return
+
+      // Fixture size from variant (fall back to sensible defaults)
+      const { widthM, heightM } = getFixtureDims(
+        s.fixturePlacementItemId,
+        s.fixturePlacementVariantId,
+        s.fixturePlacementType,
+      )
+
+      const geo = new THREE.PlaneGeometry(widthM, heightM)
+      const color = s.fixturePlacementType === 'door' ? 0x8B5A3C : 0x6AA9C8
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+      const ghost = new THREE.Mesh(geo, mat)
+      ghost.name = 'fixture-ghost'
+      ghost.visible = false
+      scene.add(ghost)
+      fixtureGhostRef.current = ghost
+    }
+
+    sync()
+    const unsub = useCanvasStore.subscribe((state, prev) => {
+      if (
+        state.fixturePlacementType === prev.fixturePlacementType &&
+        state.fixturePlacementVariantId === prev.fixturePlacementVariantId &&
+        state.fixturePlacementItemId === prev.fixturePlacementItemId
+      ) return
+      sync()
+    })
+    return unsub
+  }, [room.id])
+
   // ── Edit-shape handles (vertices + midpoints) ──────────────────────────────
   // Rendered only when useCanvasStore.shapeEditMode is on. Handles sit just
   // above the floor and are raycastable so pointer events can grab them.
@@ -733,52 +937,6 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
     return null
   }, [])
-
-  // ── NW/NE/SE/SW camera presets (RotationControls buttons) ──────────────────
-  // Moves the orbit camera to the chosen corner of the room. Ignored in roam.
-  useEffect(() => {
-    const apply = (rot: import('@/lib/roomGeometry').RoomRotation) => {
-      if (useUIStore.getState().cameraMode !== 'design') return
-      const orbit = controlsRef.current
-      const camera = cameraRef.current
-      if (!orbit || !camera) return
-
-      const verts = getVertices(room)
-      const centroid = polygonCentroid(verts)
-      const ceilingH = (room.ceiling_height_cm ?? 260) / 100
-      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity
-      for (const v of verts) {
-        if (v.u < minU) minU = v.u; if (v.u > maxU) maxU = v.u
-        if (v.v < minV) minV = v.v; if (v.v > maxV) maxV = v.v
-      }
-      const maxDim = Math.max(maxU - minU, maxV - minV, ceilingH)
-      const d = maxDim * 1.0
-
-      // CCW polygon convention: V increases going "south" (depth axis).
-      // NW = -U, -V. NE = +U, -V. SE = +U, +V. SW = -U, +V.
-      const offsets: Record<import('@/lib/roomGeometry').RoomRotation, { du: number; dv: number }> = {
-        front_left: { du: -1, dv: -1 },   // NW
-        front_right: { du: 1, dv: -1 },   // NE
-        back_right: { du: 1, dv: 1 },     // SE
-        back_left: { du: -1, dv: 1 },     // SW
-      }
-      const off = offsets[rot]
-      camera.position.set(
-        centroid.u + off.du * d,
-        ceilingH * 1.6,
-        centroid.v + off.dv * d,
-      )
-      orbit.target.set(centroid.u, ceilingH * 0.4, centroid.v)
-      orbit.update()
-    }
-
-    // Don't snap on mount — only react to user clicks.
-    const unsub = useCanvasStore.subscribe((state, prev) => {
-      if (state.roomRotation === prev.roomRotation) return
-      apply(state.roomRotation)
-    })
-    return unsub
-  }, [room])
 
   // ── Camera mode switch (design ↔ roam) ─────────────────────────────────────
   useEffect(() => {
@@ -928,6 +1086,25 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         return
       }
 
+      // Fixture placement (door / window): click on wall commits the fixture.
+      if (s.fixturePlacementType) {
+        const hit = raycastFloor(e.clientX, e.clientY)
+        if (!hit) return
+        const vertices = getVertices(room)
+        const snap = nearestWallSnap(hit.x, hit.z, vertices)
+        if (snap.length < 0.01) return
+        commitFixturePlacement(
+          s.fixturePlacementType,
+          snap.wallIndex,
+          snap.position,
+          s.fixturePlacementItemId,
+          s.fixturePlacementVariantId,
+        )
+        // Single-placement: exit placement mode after committing
+        useCanvasStore.getState().setFixturePlacementMode(null)
+        return
+      }
+
       // Placement mode: click commits the ghost.
       if (s.placementMode && s.placementItemId && s.placementVariantId) {
         const hit = raycastFloor(e.clientX, e.clientY)
@@ -1002,11 +1179,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         const stepM = 0.10
         const delta = bypass ? rawDelta : Math.round(rawDelta / stepM) * stepM
 
-        const newAU = wd.origA.u + wd.normalU * delta
-        const newAV = wd.origA.v + wd.normalV * delta
-        const newBU = wd.origB.u + wd.normalU * delta
-        const newBV = wd.origB.v + wd.normalV * delta
-        updateWallEndpointsLocal(wd.vA, wd.vB, newAU, newAV, newBU, newBV)
+        applyWallPush(delta)
         return
       }
 
@@ -1020,6 +1193,39 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
           const xCm = snapCm(hit.x * 100, step, !snap)
           const zCm = snapCm(hit.z * 100, step, !snap)
           ghostGroupRef.current.position.set(xCm / 100, 0, zCm / 100)
+        }
+      }
+
+      // Fixture ghost follow — snap to nearest wall, rotate to match wall angle
+      if (s.fixturePlacementType && fixtureGhostRef.current) {
+        const hit = raycastFloor(e.clientX, e.clientY)
+        if (hit) {
+          const vertices = getVertices(room)
+          const snap = nearestWallSnap(hit.x, hit.z, vertices)
+          const { widthM, heightM } = getFixtureDims(
+            s.fixturePlacementItemId,
+            s.fixturePlacementVariantId,
+            s.fixturePlacementType,
+          )
+          // Clamp position so the fixture fits on the wall
+          const halfW = widthM / 2
+          const clampedPos = Math.max(
+            halfW / snap.length,
+            Math.min(1 - halfW / snap.length, snap.position),
+          )
+          const a = vertices[snap.wallIndex]
+          const b = vertices[(snap.wallIndex + 1) % vertices.length]
+          const cu = a.u + clampedPos * (b.u - a.u)
+          const cv = a.v + clampedPos * (b.v - a.v)
+          const ghost = fixtureGhostRef.current
+          ghost.visible = true
+          // Window sill height — door sits on floor
+          const ceilingH = (room.ceiling_height_cm ?? 260) / 100
+          const y = s.fixturePlacementType === 'door'
+            ? heightM / 2
+            : ceilingH * 0.30 + heightM / 2
+          ghost.position.set(cu, y, cv)
+          ghost.rotation.y = -snap.angle
         }
       }
 
@@ -1127,8 +1333,10 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       const s = useCanvasStore.getState()
       if (e.key === 'Escape') {
         if (s.placementMode) s.cancelPlacement()
+        else if (s.fixturePlacementType) s.setFixturePlacementMode(null)
         else if (s.shapeEditMode && s.selectedVertexIndex != null) s.setSelectedVertex(null)
         else if (s.selectedItemId) s.setSelectedItem(null)
+        else if (s.selectedFixtureId) s.setSelectedFixture(null)
         return
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1176,6 +1384,72 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
 
     /**
+     * Writes a new door or window into `room.geometry.{doors|windows}[]` and
+     * pushes a geometry undo command. Width/height come from the selected
+     * variant's dimensions (falls back to sensible defaults for unnamed vars).
+     */
+    function commitFixturePlacement(
+      type: 'door' | 'window',
+      wallIndex: number,
+      position: number,
+      itemId: string | null,
+      variantId: string | null,
+    ) {
+      const projStore = useProjectStore
+      const room0 = projStore.getState().rooms.find((r) => r.id === room.id)
+      if (!room0) return
+      const prevGeo = JSON.parse(JSON.stringify(room0.geometry)) as import('@/types').RoomGeometry
+      const { widthM, heightM } = getFixtureDims(itemId, variantId, type)
+
+      // Clamp position so fixture fits on the wall
+      const verts = getVertices(room0)
+      const a = verts[wallIndex], b = verts[(wallIndex + 1) % verts.length]
+      const wallLen = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
+      const halfW = Math.min(widthM / 2, wallLen * 0.45)
+      const clampedPos = Math.max(
+        halfW / wallLen,
+        Math.min(1 - halfW / wallLen, position),
+      )
+
+      const newId = crypto.randomUUID()
+      let nextGeo: import('@/types').RoomGeometry
+      if (type === 'door') {
+        const newDoor: import('@/types').RoomDoor = {
+          id: newId,
+          wall_index: wallIndex,
+          position: clampedPos,
+          width_m: Math.max(0.3, Math.min(3, widthM)),
+          height_m: Math.max(0.3, heightM),
+          variant_id: variantId,
+        }
+        nextGeo = { ...room0.geometry, doors: [...(room0.geometry.doors ?? []), newDoor] }
+      } else {
+        const ceilingH = (room0.ceiling_height_cm ?? 260) / 100
+        const newWindow: import('@/types').RoomWindow = {
+          id: newId,
+          wall_index: wallIndex,
+          position: clampedPos,
+          width_m: Math.max(0.3, Math.min(3, widthM)),
+          height_m: Math.max(0.3, heightM),
+          sill_m: Math.round(ceilingH * 0.30 * 10) / 10,
+          curtain_style: 'none',
+          variant_id: variantId,
+        }
+        nextGeo = { ...room0.geometry, windows: [...(room0.geometry.windows ?? []), newWindow] }
+      }
+
+      void projStore.getState().updateRoom(room.id, { geometry: nextGeo })
+      useCanvasStore.getState().pushGeometryCommand(
+        room.id,
+        prevGeo,
+        JSON.parse(JSON.stringify(nextGeo)),
+        room0.width_cm, room0.height_cm,
+        room0.width_cm, room0.height_cm,
+      )
+      useCanvasStore.getState().setSelectedFixture(newId)
+    }
+
+    /**
      * Commit whatever the current local geometry is to the DB + push an undo
      * command with the given pre-drag snapshot. Used by both vertex drag and
      * wall push/pull — they differ only in what happens during pointermove.
@@ -1205,31 +1479,76 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
 
     /**
-     * Moves two adjacent vertices together (wall push/pull). Recomputes the
-     * bounding box and updates local project state without a DB write.
+     * Wall push/pull: rebuild polygon from the pre-drag snapshot.
+     *
+     * For each endpoint of the pushed wall, look at its *other* neighbor wall:
+     *  - If parallel to the push normal, the endpoint moves (the adjacent wall
+     *    just stretches — moving it prevents a collinear-spike artifact).
+     *  - Otherwise, the endpoint stays and a new vertex is inserted at the
+     *    pushed position, creating a clean 90° corner (bump-out / notch-in).
+     *
+     * This is what keeps push/pull orthogonal — adjacent walls never slant,
+     * and midpoint-added vertices stay put unless explicitly dragged.
      */
-    function updateWallEndpointsLocal(
-      iA: number, iB: number,
-      newAU: number, newAV: number,
-      newBU: number, newBV: number,
-    ) {
-      const projStore = useProjectStore
-      const room0 = projStore.getState().rooms.find((r) => r.id === room.id)
-      if (!room0) return
-      const curVerts = getVertices(room0)
-      if (iA < 0 || iB < 0 || iA >= curVerts.length || iB >= curVerts.length) return
-      const newVerts = curVerts.map((v, i) => {
-        if (i === iA) return { u: newAU, v: newAV }
-        if (i === iB) return { u: newBU, v: newBV }
-        return v
-      })
+    function applyWallPush(delta: number) {
+      const wd = wallDragRef.current
+      if (!wd) return
+      const prevVerts = wd.prevGeometry.vertices
+      if (!prevVerts || prevVerts.length < 3) return
+      const N = prevVerts.length
+      const iA = wd.vA
+      const iB = wd.vB
+      const iPrev = (iA - 1 + N) % N
+      const iNext = (iB + 1) % N
+      const nU = wd.normalU
+      const nV = wd.normalV
+      const newA = { u: wd.origA.u + nU * delta, v: wd.origA.v + nV * delta }
+      const newB = { u: wd.origB.u + nU * delta, v: wd.origB.v + nV * delta }
+
+      // Direction of A's other neighbor wall: iPrev → A. Parallel to push
+      // normal iff |dot(dir, n)| is close to 1. Threshold 0.5 cleanly separates
+      // orthogonal from axis-aligned without being fussy about near-right
+      // angles from earlier vertex drags.
+      const dPrevU = wd.origA.u - prevVerts[iPrev].u
+      const dPrevV = wd.origA.v - prevVerts[iPrev].v
+      const prevLen = Math.hypot(dPrevU, dPrevV)
+      const prevParallel = prevLen > 1e-4 &&
+        Math.abs((dPrevU * nU + dPrevV * nV) / prevLen) > 0.5
+
+      const dNextU = prevVerts[iNext].u - wd.origB.u
+      const dNextV = prevVerts[iNext].v - wd.origB.v
+      const nextLen = Math.hypot(dNextU, dNextV)
+      const nextParallel = nextLen > 1e-4 &&
+        Math.abs((dNextU * nU + dNextV * nV) / nextLen) > 0.5
+
+      const out: { u: number; v: number }[] = []
+      for (let i = 0; i < N; i++) {
+        if (i === iA) {
+          if (prevParallel) {
+            out.push(newA)
+          } else {
+            out.push(prevVerts[i])
+            out.push(newA)
+          }
+        } else if (i === iB) {
+          if (nextParallel) {
+            out.push(newB)
+          } else {
+            out.push(newB)
+            out.push(prevVerts[i])
+          }
+        } else {
+          out.push(prevVerts[i])
+        }
+      }
+
       let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity
-      for (const v of newVerts) {
+      for (const v of out) {
         if (v.u < minU) minU = v.u; if (v.u > maxU) maxU = v.u
         if (v.v < minV) minV = v.v; if (v.v > maxV) maxV = v.v
       }
-      const newGeo: import('@/types').RoomGeometry = { ...room0.geometry, vertices: newVerts }
-      projStore.setState((state) => ({
+      const newGeo: import('@/types').RoomGeometry = { ...wd.prevGeometry, vertices: out }
+      useProjectStore.setState((state) => ({
         rooms: state.rooms.map((r) => r.id === room.id
           ? { ...r, geometry: newGeo, width_cm: Math.round((maxU - minU) * 100), height_cm: Math.round((maxV - minV) * 100) }
           : r
@@ -1330,17 +1649,20 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       ref={containerRef}
       className={`room-canvas ${placementMode ? 'placement-mode' : ''} ${cameraMode === 'roam' ? 'roam-mode' : ''}`}
     >
+      {/* Edit-shape wall length labels (populated imperatively in the animate loop). */}
+      <div ref={dimLabelsRef} className="wall-dim-labels-layer" />
+
       {/* Floating canvas controls */}
       <button
         type="button"
         className={`canvas-toggle-btn grid-toggle-btn ${gridOn ? 'active' : ''}`}
         onClick={() => setCanvasGrid(!gridOn)}
-        title={gridOn ? 'Hide world grid' : 'Show world grid'}
+        title={gridOn ? t('editor.canvas.hideWorldGrid') : t('editor.canvas.showWorldGrid')}
       >
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
           <path d="M0.5 4.5h13M0.5 9.5h13M4.5 0.5v13M9.5 0.5v13" />
         </svg>
-        Grid
+        {t('editor.canvas.gridLabel')}
       </button>
 
       {/* Camera mode toggle */}
@@ -1348,15 +1670,15 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         type="button"
         className={`canvas-toggle-btn mode-toggle-btn ${cameraMode === 'roam' ? 'active' : ''}`}
         onClick={() => cameraMode === 'design' ? enterRoam() : setCameraMode('design')}
-        title={cameraMode === 'roam' ? 'Back to design view' : 'Walk through the room (first-person)'}
+        title={cameraMode === 'roam' ? t('editor.canvas.backToDesign') : t('editor.canvas.enterRoam')}
       >
-        {cameraMode === 'roam' ? '🎨 Design' : '🚶 Roam'}
+        {cameraMode === 'roam' ? `🎨 ${t('editor.canvas.cameraDesign')}` : `🚶 ${t('editor.canvas.cameraRoam')}`}
       </button>
 
       {/* Roam-mode hint — small banner shown while walking */}
       {cameraMode === 'roam' && (
         <div className="roam-hint">
-          <strong>WASD</strong> to move · <strong>Shift</strong> to sprint · <strong>Mouse</strong> to look · <strong>Esc</strong> to exit
+          <strong>WASD</strong> {t('editor.canvas.roamHintMove')} · <strong>Shift</strong> {t('editor.canvas.roamHintSprint')} · <strong>Mouse</strong> {t('editor.canvas.roamHintLook')} · <strong>Esc</strong> {t('editor.canvas.roamHintExit')}
         </div>
       )}
 
@@ -1431,6 +1753,30 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         .roam-hint strong {
           font-weight: 700;
           color: #7FE5DE;
+        }
+        .wall-dim-labels-layer {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 4;
+        }
+        .wall-dim-label {
+          position: absolute;
+          left: 0;
+          top: 0;
+          padding: 3px 9px;
+          border-radius: 999px;
+          background: #FFFFFF;
+          color: var(--color-primary-brand);
+          border: 1.5px solid var(--color-primary-brand);
+          font-size: 11px;
+          font-weight: 700;
+          font-family: inherit;
+          letter-spacing: 0.2px;
+          white-space: nowrap;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+          user-select: none;
+          font-variant-numeric: tabular-nums;
         }
       `}</style>
     </div>
