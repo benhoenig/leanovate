@@ -83,6 +83,53 @@ export function nearestPointOnPolygon(u: number, v: number, vertices: RoomVertex
   return { u: bestU, v: bestV }
 }
 
+/**
+ * Snaps a cursor point to the nearest wall segment.
+ * Returns wall index (into `vertices` segments), position 0–1 along the segment,
+ * the projected point on the wall, and the segment's world-space angle.
+ */
+export function nearestWallSnap(
+  u: number, v: number, vertices: RoomVertex[]
+): {
+  wallIndex: number
+  position: number
+  point: RoomVertex
+  angle: number
+  length: number
+} {
+  let bestIdx = 0
+  let bestT = 0.5
+  let bestU = vertices[0].u, bestV = vertices[0].v
+  let bestDist2 = Infinity
+  let bestAngle = 0
+  let bestLen = 0
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i], b = vertices[(i + 1) % vertices.length]
+    const du = b.u - a.u, dv = b.v - a.v
+    const len2 = du * du + dv * dv
+    if (len2 < 1e-6) continue
+    const t = Math.max(0, Math.min(1, ((u - a.u) * du + (v - a.v) * dv) / len2))
+    const cu = a.u + t * du, cv = a.v + t * dv
+    const d2 = (u - cu) ** 2 + (v - cv) ** 2
+    if (d2 < bestDist2) {
+      bestDist2 = d2
+      bestIdx = i
+      bestT = t
+      bestU = cu
+      bestV = cv
+      bestAngle = Math.atan2(dv, du)
+      bestLen = Math.sqrt(len2)
+    }
+  }
+  return {
+    wallIndex: bestIdx,
+    position: bestT,
+    point: { u: bestU, v: bestV },
+    angle: bestAngle,
+    length: bestLen,
+  }
+}
+
 // ── Polygon centroid ─────────────────────────────────────────────────────────
 
 export function polygonCentroid(vertices: RoomVertex[]): RoomVertex {

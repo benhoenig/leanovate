@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { X, Download, Loader2, AlertTriangle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { renderFloorPlan, renderElevation, exportConstructionPDF, type FurnitureDrawData } from '@/lib/renderConstructionDrawings'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
@@ -7,6 +8,7 @@ import { useCatalogStore } from '@/stores/useCatalogStore'
 import { getVertices } from '@/lib/roomGeometry'
 
 export default function ConstructionDrawingModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [status, setStatus] = useState<'rendering' | 'complete' | 'error'>('rendering')
   const [error, setError] = useState<string | null>(null)
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
@@ -16,7 +18,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
 
   const { rooms, selectedRoomId, currentProject } = useProjectStore()
   const room = rooms.find((r) => r.id === selectedRoomId) ?? null
-  const projectName = currentProject?.name ?? 'Project'
+  const projectName = currentProject?.name ?? t('drawings.fallbackProjectName')
 
   /** Resolve placed furniture for this room + attach variant/item refs for drawing. */
   const collectFurniture = (): FurnitureDrawData[] => {
@@ -38,7 +40,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
 
   useEffect(() => {
     if (!room) {
-      setError('No room selected')
+      setError(t('drawings.errorNoRoom'))
       setStatus('error')
       return
     }
@@ -80,7 +82,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
 
       setStatus('complete')
     } catch (err) {
-      setError('Failed to render drawings: ' + String(err))
+      setError(t('drawings.errorRenderFailed', { error: String(err) }))
       setStatus('error')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -109,7 +111,11 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
       <div className="cd-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="cd-header">
-          <span className="cd-title">Construction Drawings — {room?.name ?? 'Room'}</span>
+          <span className="cd-title">
+            {t('drawings.titleWithRoom', {
+              name: room?.name ?? t('drawings.fallbackRoomName'),
+            })}
+          </span>
           <button className="cd-close" onClick={onClose}>
             <X size={18} />
           </button>
@@ -120,14 +126,14 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
           {status === 'rendering' && (
             <div className="cd-loading">
               <Loader2 size={32} className="cd-spinner" />
-              <p>Generating drawings…</p>
+              <p>{t('drawings.generatingTitle')}</p>
             </div>
           )}
 
           {status === 'error' && (
             <div className="cd-error">
               <AlertTriangle size={32} />
-              <p>Drawing generation failed</p>
+              <p>{t('drawings.errorTitle')}</p>
               <p className="cd-error-detail">{error}</p>
             </div>
           )}
@@ -137,20 +143,30 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
               {/* Floor plan (large) */}
               {floorPlanUrl && (
                 <div className="cd-drawing-section">
-                  <h3 className="cd-section-label">Floor Plan</h3>
-                  <img src={floorPlanUrl} alt="Floor Plan" className="cd-floor-plan" />
+                  <h3 className="cd-section-label">{t('drawings.floorPlan')}</h3>
+                  <img
+                    src={floorPlanUrl}
+                    alt={t('drawings.floorPlanAlt')}
+                    className="cd-floor-plan"
+                  />
                 </div>
               )}
 
               {/* Elevations */}
               {elevationUrls.length > 0 && (
                 <div className="cd-drawing-section">
-                  <h3 className="cd-section-label">Wall Elevations</h3>
+                  <h3 className="cd-section-label">{t('drawings.wallElevations')}</h3>
                   <div className="cd-elevation-grid">
                     {elevationUrls.map((url, i) => (
                       <div key={i} className="cd-elevation-item">
-                        <span className="cd-elevation-label">Wall {i + 1}</span>
-                        <img src={url} alt={`Wall ${i + 1} Elevation`} className="cd-elevation-img" />
+                        <span className="cd-elevation-label">
+                          {t('drawings.wallLabel', { index: i + 1 })}
+                        </span>
+                        <img
+                          src={url}
+                          alt={t('drawings.wallElevationAlt', { index: i + 1 })}
+                          className="cd-elevation-img"
+                        />
                       </div>
                     ))}
                   </div>
@@ -169,7 +185,7 @@ export default function ConstructionDrawingModal({ onClose }: { onClose: () => v
               disabled={isExporting}
             >
               {isExporting ? <Loader2 size={14} className="cd-spinner" /> : <Download size={14} />}
-              {isExporting ? 'Exporting…' : 'Download PDF'}
+              {isExporting ? t('drawings.exporting') : t('drawings.downloadPdf')}
             </button>
           </div>
         )}

@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import type { PlacedFurniture, RoomGeometry } from '@/types'
-import type { RoomRotation } from '@/lib/roomGeometry'
 import { supabase, rawInsert, rawInsertMany, rawUpdate, rawDelete, rawDeleteWhere } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -26,12 +25,15 @@ interface CanvasState {
   placementMode: boolean
   placementItemId: string | null       // furniture_item_id to place
   placementVariantId: string | null    // default variant for placement
-  roomRotation: RoomRotation
   isDragging: boolean
   isPanning: boolean
 
   // Fixture (door/window) placement
   fixturePlacementType: 'door' | 'window' | null
+  /** Catalog variant the ghost fixture should render as. Null = generic panel fallback. */
+  fixturePlacementVariantId: string | null
+  /** Catalog item id the variant belongs to — used for dimension lookup. */
+  fixturePlacementItemId: string | null
   selectedFixtureId: string | null
 
   // Shape edit mode
@@ -44,12 +46,6 @@ interface CanvasState {
   canUndo: boolean
   canRedo: boolean
   isUndoRedoInProgress: boolean
-
-  // Zoom/Pan
-  displayZoom: number
-  zoomIn: () => void
-  zoomOut: () => void
-  fitToRoom: () => void
 
   // ─ Actions ──────────────────────────────────────────────────────────────
 
@@ -81,18 +77,20 @@ interface CanvasState {
   undo: () => Promise<void>
   redo: () => Promise<void>
 
-  setRoomRotation: (rotation: RoomRotation) => void
   setDragging: (val: boolean) => void
   setIsPanning: (val: boolean) => void
 
-  setFixturePlacementMode: (type: 'door' | 'window' | null) => void
+  setFixturePlacementMode: (
+    type: 'door' | 'window' | null,
+    variantId?: string | null,
+    itemId?: string | null,
+  ) => void
+  /** Swap the variant on a selected fixture — geometry stays, only variant_id changes. */
+  switchFixtureVariant: (roomId: string, fixtureId: string, variantId: string) => Promise<void>
   setSelectedFixture: (id: string | null) => void
 
   setShapeEditMode: (val: boolean) => void
   setSelectedVertex: (idx: number | null) => void
-
-  setDisplayZoom: (z: number) => void
-  setZoomFunctions: (fns: { zoomIn: () => void; zoomOut: () => void; fitToRoom: () => void }) => void
 }
 
 // ── History helper ────────────────────────────────────────────────────────────
@@ -117,10 +115,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   placementMode: false,
   placementItemId: null,
   placementVariantId: null,
-  roomRotation: 'front_left',
   isDragging: false,
   isPanning: false,
   fixturePlacementType: null,
+  fixturePlacementVariantId: null,
+  fixturePlacementItemId: null,
   selectedFixtureId: null,
   shapeEditMode: false,
   selectedVertexIndex: null,
@@ -131,12 +130,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   canUndo: false,
   canRedo: false,
   isUndoRedoInProgress: false,
-
-  // Zoom/Pan
-  displayZoom: 1.0,
-  zoomIn: () => {},
-  zoomOut: () => {},
-  fitToRoom: () => {},
 
   // ─── Load / Save ──────────────────────────────────────────────────────────
 
@@ -218,6 +211,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       placementVariantId: active ? (variantId ?? null) : null,
       selectedItemId: active ? null : get().selectedItemId,
       fixturePlacementType: null,
+      fixturePlacementVariantId: null,
+      fixturePlacementItemId: null,
       selectedFixtureId: null,
     }),
 
@@ -258,7 +253,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   cancelPlacement: () =>
-    set({ placementMode: false, placementItemId: null, placementVariantId: null, fixturePlacementType: null }),
+    set({
+      placementMode: false,
+      placementItemId: null,
+      placementVariantId: null,
+      fixturePlacementType: null,
+      fixturePlacementVariantId: null,
+      fixturePlacementItemId: null,
+    }),
 
   // ─── Selection ────────────────────────────────────────────────────────────
 
@@ -524,10 +526,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
 
-  // ─── Room Rotation ────────────────────────────────────────────────────────
-
-  setRoomRotation: (direction) => set({ roomRotation: direction }),
-
   // ─── Drag ─────────────────────────────────────────────────────────────────
 
   setDragging: (val) => set({ isDragging: val }),
@@ -535,14 +533,40 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   // ─── Fixture Placement (doors/windows) ──────────────────────────────────
 
-  setFixturePlacementMode: (type) => set({
+  setFixturePlacementMode: (type, variantId, itemId) => set({
     fixturePlacementType: type,
+    fixturePlacementVariantId: type ? (variantId ?? null) : null,
+    fixturePlacementItemId: type ? (itemId ?? null) : null,
     placementMode: false,
     placementItemId: null,
     placementVariantId: null,
     selectedItemId: null,
     selectedFixtureId: null,
   }),
+
+  switchFixtureVariant: async (roomId, fixtureId, variantId) => {
+    const room = useProjectStore.getState().rooms.find((r) => r.id === roomId)
+    if (!room) return
+    const prevGeo = JSON.parse(JSON.stringify(room.geometry)) as RoomGeometry
+    const doors = (room.geometry.doors ?? []).map((d) =>
+      d.id === fixtureId ? { ...d, variant_id: variantId } : d
+    )
+    const windows = (room.geometry.windows ?? []).map((w) =>
+      w.id === fixtureId ? { ...w, variant_id: variantId } : w
+    )
+    const nextGeo = { ...room.geometry, doors, windows }
+    await useProjectStore.getState().updateRoom(roomId, { geometry: nextGeo })
+    pushCommand(set, get, {
+      type: 'geometry',
+      roomId,
+      prevGeometry: prevGeo,
+      nextGeometry: JSON.parse(JSON.stringify(nextGeo)),
+      prevWidthCm: room.width_cm,
+      prevHeightCm: room.height_cm,
+      nextWidthCm: room.width_cm,
+      nextHeightCm: room.height_cm,
+    })
+  },
 
   setSelectedFixture: (id) => set({
     selectedFixtureId: id,
@@ -558,12 +582,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     selectedFixtureId: null,
     placementMode: false,
     fixturePlacementType: null,
+    fixturePlacementVariantId: null,
+    fixturePlacementItemId: null,
   }),
 
   setSelectedVertex: (idx) => set({ selectedVertexIndex: idx }),
-
-  // ─── Zoom/Pan ─────────────────────────────────────────────────────────
-
-  setDisplayZoom: (z) => set({ displayZoom: z }),
-  setZoomFunctions: (fns) => set({ zoomIn: fns.zoomIn, zoomOut: fns.zoomOut, fitToRoom: fns.fitToRoom }),
 }))

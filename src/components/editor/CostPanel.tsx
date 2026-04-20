@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, AlertTriangle, Check } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 
 export default function CostPanel() {
+  const { t, i18n } = useTranslation()
   const placedFurniture = useCanvasStore((s) => s.placedFurniture)
   const switchVariant = useCanvasStore((s) => s.switchVariant)
   const { currentProject, updateProject } = useProjectStore()
@@ -33,7 +35,7 @@ export default function CostPanel() {
     const stale = pf.price_at_placement != null && currentPrice != null && pf.price_at_placement !== currentPrice
     furnitureLines.push({
       placedId: pf.id,
-      name: item?.name ?? 'Unknown',
+      name: item?.name ?? t('editor.cost.unknown'),
       color: variant?.color_name ?? '',
       currentPrice,
       placementPrice: pf.price_at_placement,
@@ -86,16 +88,26 @@ export default function CostPanel() {
     }
   }
 
-  const fmt = (n: number) => `฿${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
+  const fmt = (n: number) => `฿${n.toLocaleString(localeTag, { maximumFractionDigits: 0 })}`
+
+  const itemWord = furnitureLines.length === 1 ? t('editor.cost.itemSingular') : t('editor.cost.itemPlural')
+  const manualWord = manualEntries.length === 1 ? t('editor.cost.manualSingular') : t('editor.cost.manualPlural')
+  const staleWord = staleCount === 1 ? t('editor.cost.stalenessSingular') : t('editor.cost.stalenessPlural')
 
   return (
     <div className="cost-panel">
       {/* Grand Total Card */}
       <div className="cost-grand-card">
-        <span className="cost-grand-label">Grand Total</span>
+        <span className="cost-grand-label">{t('editor.cost.grandTotal')}</span>
         <span className="cost-grand-value">{fmt(grandTotal)}</span>
         <span className="cost-grand-sub">
-          {furnitureLines.length} item{furnitureLines.length !== 1 ? 's' : ''} + {manualEntries.length} manual cost{manualEntries.length !== 1 ? 's' : ''}
+          {t('editor.cost.grandSub', {
+            itemCount: furnitureLines.length,
+            itemWord,
+            manualCount: manualEntries.length,
+            manualWord,
+          })}
         </span>
       </div>
 
@@ -103,18 +115,18 @@ export default function CostPanel() {
       {staleCount > 0 && (
         <div className="cost-stale-banner">
           <AlertTriangle size={14} />
-          <span>{staleCount} item{staleCount !== 1 ? 's have' : ' has'} price changes</span>
+          <span>{t('editor.cost.stalenessBanner', { count: staleCount, word: staleWord })}</span>
           <button className="cost-stale-ack" onClick={acknowledgeAll}>
-            <Check size={12} /> Acknowledge
+            <Check size={12} /> {t('editor.cost.acknowledge')}
           </button>
         </div>
       )}
 
       {/* Furniture Breakdown */}
       <div className="cost-section">
-        <span className="cost-section-title">FURNITURE</span>
+        <span className="cost-section-title">{t('editor.cost.furnitureTitle')}</span>
         {furnitureLines.length === 0 ? (
-          <span className="cost-empty">No furniture placed</span>
+          <span className="cost-empty">{t('editor.cost.noFurniture')}</span>
         ) : (
           <div className="cost-lines">
             {furnitureLines.map((line) => (
@@ -137,7 +149,7 @@ export default function CostPanel() {
           </div>
         )}
         <div className="cost-subtotal-row">
-          <span>Furniture Subtotal</span>
+          <span>{t('editor.cost.furnitureSubtotal')}</span>
           <span className="cost-subtotal-value">{fmt(furnitureTotal)}</span>
         </div>
       </div>
@@ -146,7 +158,7 @@ export default function CostPanel() {
 
       {/* Manual Costs */}
       <div className="cost-section">
-        <span className="cost-section-title">MANUAL COSTS</span>
+        <span className="cost-section-title">{t('editor.cost.manualTitle')}</span>
         {manualEntries.length > 0 && (
           <div className="cost-lines">
             {manualEntries.map(([key, val]) => (
@@ -171,7 +183,7 @@ export default function CostPanel() {
                       {fmt(val)}
                     </span>
                   )}
-                  <button className="cost-line-delete" onClick={() => handleDeleteCost(key)} title="Remove">
+                  <button className="cost-line-delete" onClick={() => handleDeleteCost(key)} title={t('editor.cost.removeCost')}>
                     <Trash2 size={11} />
                   </button>
                 </div>
@@ -180,7 +192,7 @@ export default function CostPanel() {
           </div>
         )}
         <div className="cost-subtotal-row">
-          <span>Manual Subtotal</span>
+          <span>{t('editor.cost.manualSubtotal')}</span>
           <span className="cost-subtotal-value">{fmt(manualTotal)}</span>
         </div>
 
@@ -188,17 +200,17 @@ export default function CostPanel() {
           <div className="cost-add-inline">
             <input
               className="cost-add-input"
-              placeholder="Cost label (e.g. Renovation)"
+              placeholder={t('editor.cost.costPlaceholder')}
               value={newCostLabel}
               onChange={(e) => setNewCostLabel(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddCost(); if (e.key === 'Escape') setAddingCost(false) }}
               autoFocus
             />
-            <button className="cost-add-confirm" onClick={handleAddCost}>Add</button>
+            <button className="cost-add-confirm" onClick={handleAddCost}>{t('editor.cost.addConfirm')}</button>
           </div>
         ) : (
           <button className="cost-add-btn" onClick={() => setAddingCost(true)}>
-            <Plus size={13} /> Add Cost
+            <Plus size={13} /> {t('editor.cost.addCost')}
           </button>
         )}
       </div>

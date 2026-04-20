@@ -1,13 +1,13 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-heading: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-heading: 'Inter', 'IBM Plex Sans Thai', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: 'Inter', 'IBM Plex Sans Thai', -apple-system, BlinkMacSystemFont, sans-serif;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -140,13 +140,21 @@
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Inter', 'IBM Plex Sans Thai', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: var(--color-text-primary);
   background: var(--color-canvas-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html[lang="th"] body,
+html[lang="th"] button,
+html[lang="th"] input,
+html[lang="th"] textarea,
+html[lang="th"] select {
+  font-family: 'IBM Plex Sans Thai', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 #root {

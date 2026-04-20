@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Trash2, Globe, User, Shuffle, ArrowUpCircle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useTemplateStore } from '@/stores/useTemplateStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -10,6 +11,7 @@ import StalenessDialog from './StalenessDialog'
 type SubTab = 'unit' | 'furniture' | 'style'
 
 export default function TemplatePanel() {
+  const { t } = useTranslation()
   const {
     unitTemplates, furnitureTemplates, styleTemplates,
     saveUnitTemplate, saveFurnitureTemplate, saveStyleTemplate,
@@ -43,7 +45,7 @@ export default function TemplatePanel() {
       result = await saveFurnitureTemplate(saveName.trim())
     } else {
       if (!saveStyleId) {
-        showToast('Select a style', 'warning')
+        showToast(t('templates.selectStyleToast'), 'warning')
         setApplying(false)
         return
       }
@@ -53,7 +55,7 @@ export default function TemplatePanel() {
     if (result.error) {
       showToast(result.error, 'error')
     } else {
-      showToast('Template saved', 'success')
+      showToast(t('templates.templateSavedToast'), 'success')
       setSaving(false)
       setSaveName('')
       setSaveStyleId('')
@@ -67,11 +69,11 @@ export default function TemplatePanel() {
     if (subTab === 'unit') {
       const { error } = await applyUnitTemplate(templateId)
       if (error) showToast(error, 'error')
-      else showToast('Unit layout applied', 'success')
+      else showToast(t('templates.unitLayoutApplied'), 'success')
     } else if (subTab === 'furniture') {
       const { error } = await applyFurnitureTemplate(templateId)
       if (error) showToast(error, 'warning')
-      else showToast('Furniture layout applied', 'success')
+      else showToast(t('templates.furnitureLayoutApplied'), 'success')
     } else {
       const { alerts, error } = await applyStyleTemplate(templateId)
       if (error) { showToast(error, 'error'); setApplying(false); return }
@@ -80,7 +82,7 @@ export default function TemplatePanel() {
         setApplying(false)
         return
       }
-      showToast('Design style applied', 'success')
+      showToast(t('templates.designStyleApplied'), 'success')
     }
     setApplying(false)
   }
@@ -91,7 +93,7 @@ export default function TemplatePanel() {
     await applyStyleTemplate(pendingStyleTemplateId, true)
     setPendingStyleTemplateId(null)
     clearStalenessAlerts()
-    showToast('Design style applied', 'success')
+    showToast(t('templates.designStyleApplied'), 'success')
     setApplying(false)
   }
 
@@ -99,7 +101,7 @@ export default function TemplatePanel() {
     setApplying(true)
     const { error } = await regenerateStyle(styleId)
     if (error) showToast(error, 'warning')
-    else showToast('Furniture regenerated', 'success')
+    else showToast(t('templates.furnitureRegenerated'), 'success')
     setApplying(false)
   }
 
@@ -116,7 +118,7 @@ export default function TemplatePanel() {
         <div className="tp-card-header">
           <span className="tp-card-name">{template.name}</span>
           <span className={`tp-badge ${template.is_global ? 'global' : 'personal'}`}>
-            {template.is_global ? <><Globe size={9} /> Global</> : <><User size={9} /> Personal</>}
+            {template.is_global ? <><Globe size={9} /> {t('templates.badgeGlobalLabel')}</> : <><User size={9} /> {t('templates.badgePersonalLabel')}</>}
           </span>
         </div>
         <div className="tp-card-actions">
@@ -125,14 +127,14 @@ export default function TemplatePanel() {
             onClick={() => handleApply(template.id)}
             disabled={applying}
           >
-            Apply
+            {t('templates.applyButton')}
           </button>
           {extra}
           {isAdmin && !template.is_global && (
             <button
               className="tp-promote-btn"
               onClick={() => promoteTemplate(type, template.id)}
-              title="Promote to global"
+              title={t('templates.promoteToGlobal')}
             >
               <ArrowUpCircle size={13} />
             </button>
@@ -141,7 +143,7 @@ export default function TemplatePanel() {
             <button
               className="tp-delete-btn"
               onClick={() => deleteTemplate(type, template.id)}
-              title="Delete template"
+              title={t('templates.deleteTemplateTitle')}
             >
               <Trash2 size={13} />
             </button>
@@ -153,24 +155,24 @@ export default function TemplatePanel() {
 
   const renderList = () => {
     if (subTab === 'unit') {
-      if (unitTemplates.length === 0) return <p className="tp-empty">No unit layout templates</p>
-      return unitTemplates.map((t) => renderTemplateCard(t, 'unit'))
+      if (unitTemplates.length === 0) return <p className="tp-empty">{t('templates.noUnitTemplates')}</p>
+      return unitTemplates.map((tpl) => renderTemplateCard(tpl, 'unit'))
     }
     if (subTab === 'furniture') {
-      if (furnitureTemplates.length === 0) return <p className="tp-empty">No furniture layout templates</p>
-      return furnitureTemplates.map((t) => renderTemplateCard(t, 'furniture'))
+      if (furnitureTemplates.length === 0) return <p className="tp-empty">{t('templates.noFurnitureTemplates')}</p>
+      return furnitureTemplates.map((tpl) => renderTemplateCard(tpl, 'furniture'))
     }
-    if (styleTemplates.length === 0) return <p className="tp-empty">No design style templates</p>
-    return styleTemplates.map((t) => {
-      const style = styles.find((s) => s.id === (t as DesignStyleTemplate).style_id)
-      return renderTemplateCard(t, 'style', (
+    if (styleTemplates.length === 0) return <p className="tp-empty">{t('templates.noStyleTemplates')}</p>
+    return styleTemplates.map((tpl) => {
+      const style = styles.find((s) => s.id === (tpl as DesignStyleTemplate).style_id)
+      return renderTemplateCard(tpl, 'style', (
         <>
           {style && <span className="tp-style-tag">{style.name}</span>}
           <button
             className="tp-regen-btn"
-            onClick={() => handleRegenerate((t as DesignStyleTemplate).style_id)}
+            onClick={() => handleRegenerate((tpl as DesignStyleTemplate).style_id)}
             disabled={applying}
-            title="Regenerate with random picks"
+            title={t('templates.regenerateTitle')}
           >
             <Shuffle size={12} />
           </button>
@@ -189,7 +191,7 @@ export default function TemplatePanel() {
             className={`tp-subtab ${subTab === tab ? 'active' : ''}`}
             onClick={() => { setSubTab(tab); setSaving(false) }}
           >
-            {tab === 'unit' ? 'Unit' : tab === 'furniture' ? 'Furniture' : 'Style'}
+            {tab === 'unit' ? t('templates.tabUnit') : tab === 'furniture' ? t('templates.tabFurniture') : t('templates.tabStyle')}
           </button>
         ))}
       </div>
@@ -205,7 +207,7 @@ export default function TemplatePanel() {
           <div className="tp-save-form">
             <input
               className="tp-save-input"
-              placeholder="Template name"
+              placeholder={t('templates.saveNamePlaceholder')}
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setSaving(false) }}
@@ -217,7 +219,7 @@ export default function TemplatePanel() {
                 value={saveStyleId}
                 onChange={(e) => setSaveStyleId(e.target.value)}
               >
-                <option value="">Select style…</option>
+                <option value="">{t('templates.selectStyleOption')}</option>
                 {styles.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -225,16 +227,16 @@ export default function TemplatePanel() {
             )}
             <div className="tp-save-btns">
               <button className="tp-save-confirm" onClick={handleSave} disabled={applying}>
-                Save
+                {t('common.save')}
               </button>
               <button className="tp-save-cancel" onClick={() => setSaving(false)}>
-                Cancel
+                {t('common.cancel')}
               </button>
             </div>
           </div>
         ) : (
           <button className="tp-save-btn" onClick={() => setSaving(true)}>
-            Save Current as Template
+            {t('templates.saveCurrentAsTemplate')}
           </button>
         )}
       </div>

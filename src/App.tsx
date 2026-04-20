@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import LoginPage from '@/pages/LoginPage'
@@ -11,6 +12,7 @@ import { Boxes, X } from 'lucide-react'
 // Auth-protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isInitialized } = useAuthStore()
+  const { t } = useTranslation()
 
   if (!isInitialized || isLoading) {
     return (
@@ -18,7 +20,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         <div className="loading-icon">
           <Boxes size={28} strokeWidth={1.8} />
         </div>
-        <p className="loading-text">Loading...</p>
+        <p className="loading-text">{t('common.loading')}</p>
         <style>{`
           .loading-screen {
             min-height: 100dvh;

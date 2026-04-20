@@ -1,22 +1,19 @@
 import { useState, useRef } from 'react'
-import { Plus, Trash2, Upload } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { Plus, Trash2, Upload, LayoutDashboard, Palette, Package, DoorOpen, Layers } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { supabase, rawStorageUpload } from '@/lib/supabase'
 import type { FinishType } from '@/types'
 import CatalogPanel from './CatalogPanel'
+import FixturePickerPanel from './FixturePickerPanel'
 import TemplatePanel from './TemplatePanel'
 
-const FINISH_SECTIONS: { type: FinishType; label: string }[] = [
-  { type: 'wall', label: 'WALL' },
-  { type: 'floor', label: 'FLOOR' },
-  { type: 'door', label: 'DOOR' },
-  { type: 'window', label: 'WINDOW' },
-  { type: 'lighting', label: 'LIGHTING' },
-]
+const FINISH_TYPES: FinishType[] = ['wall', 'floor', 'door', 'window', 'lighting']
 
 export default function LeftSidebar() {
+  const { t } = useTranslation()
   const { rooms, selectedRoomId, currentProject, finishMaterials, setSelectedRoom, addRoom, deleteRoom, updateRoom, loadFinishMaterials } = useProjectStore()
   const { sidebarTab, setSidebarTab } = useUIStore()
   const { user } = useAuthStore()
@@ -63,7 +60,7 @@ export default function LeftSidebar() {
     const path = `${user.id}/${crypto.randomUUID()}.${ext}`
     const { publicUrl, error: uploadError } = await rawStorageUpload('textures', path, file, { contentType: file.type })
     if (uploadError || !publicUrl) {
-      showToast('Upload failed', 'error')
+      showToast(t('editor.finishes.uploadFailed'), 'error')
       return
     }
     const { data: matData, error: insertError } = await supabase
@@ -72,14 +69,14 @@ export default function LeftSidebar() {
       .select()
       .single()
     if (insertError) {
-      showToast('Failed to save material', 'error')
+      showToast(t('editor.finishes.saveFailed'), 'error')
       return
     }
     await loadFinishMaterials()
     if (selectedRoom) {
       handleFinishSelect(type, (matData as { id: string }).id)
     }
-    showToast('Custom texture uploaded', 'success')
+    showToast(t('editor.finishes.customUploaded'), 'success')
   }
 
   return (
@@ -89,35 +86,55 @@ export default function LeftSidebar() {
         <button
           className={`sidebar-tab ${sidebarTab === 'rooms' ? 'active' : ''}`}
           onClick={() => setSidebarTab('rooms')}
+          title={t('editor.sidebar.rooms')}
+          aria-label={t('editor.sidebar.rooms')}
         >
-          Rooms
+          <LayoutDashboard size={16} />
         </button>
         <button
           className={`sidebar-tab ${sidebarTab === 'finishes' ? 'active' : ''}`}
           onClick={() => setSidebarTab('finishes')}
+          title={t('editor.sidebar.finishes')}
+          aria-label={t('editor.sidebar.finishes')}
         >
-          Finishes
+          <Palette size={16} />
         </button>
         <button
           className={`sidebar-tab ${sidebarTab === 'catalog' ? 'active' : ''}`}
           onClick={() => setSidebarTab('catalog')}
+          title={t('editor.sidebar.catalog')}
+          aria-label={t('editor.sidebar.catalog')}
         >
-          Catalog
+          <Package size={16} />
+        </button>
+        <button
+          className={`sidebar-tab ${sidebarTab === 'fixtures' ? 'active' : ''}`}
+          onClick={() => setSidebarTab('fixtures')}
+          title={t('editor.sidebar.fixtures')}
+          aria-label={t('editor.sidebar.fixtures')}
+        >
+          <DoorOpen size={16} />
         </button>
         <button
           className={`sidebar-tab ${sidebarTab === 'templates' ? 'active' : ''}`}
           onClick={() => setSidebarTab('templates')}
+          title={t('editor.sidebar.templates')}
+          aria-label={t('editor.sidebar.templates')}
         >
-          Templates
+          <Layers size={16} />
         </button>
+      </div>
+
+      {/* Current tab title — replaces the text we lost when tabs became icons */}
+      <div className="sidebar-title-bar">
+        {t(`editor.sidebar.${sidebarTab}`)}
       </div>
 
       {/* Rooms Tab */}
       {sidebarTab === 'rooms' && (
         <div className="sidebar-section">
-          <div className="section-header">
-            <span className="section-title">ROOMS</span>
-            <button className="icon-btn" onClick={() => setAddingRoom(true)} title="Add room">
+          <div className="section-header section-header--end">
+            <button className="icon-btn" onClick={() => setAddingRoom(true)} title={t('editor.rooms.addRoom')}>
               <Plus size={14} />
             </button>
           </div>
@@ -136,7 +153,7 @@ export default function LeftSidebar() {
                 <button
                   className={`room-delete-btn ${deletingId === room.id ? 'confirm' : ''}`}
                   onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id) }}
-                  title={deletingId === room.id ? 'Click again to confirm delete' : 'Delete room'}
+                  title={deletingId === room.id ? t('editor.rooms.confirmDelete') : t('editor.rooms.deleteRoom')}
                 >
                   <Trash2 size={13} />
                 </button>
@@ -148,7 +165,7 @@ export default function LeftSidebar() {
                 <input
                   className="add-room-input"
                   autoFocus
-                  placeholder="Room name…"
+                  placeholder={t('editor.rooms.roomNamePlaceholder')}
                   value={newRoomName}
                   onChange={(e) => setNewRoomName(e.target.value)}
                   onKeyDown={(e) => {
@@ -165,7 +182,7 @@ export default function LeftSidebar() {
             {rooms.length === 0 && !addingRoom && (
               <button className="add-first-room-btn" onClick={() => setAddingRoom(true)}>
                 <Plus size={14} />
-                Add First Room
+                {t('editor.rooms.addFirstRoom')}
               </button>
             )}
           </div>
@@ -175,6 +192,9 @@ export default function LeftSidebar() {
       {/* Catalog Tab */}
       {sidebarTab === 'catalog' && <CatalogPanel />}
 
+      {/* Fixtures Tab (doors, windows — wall-mount catalog) */}
+      {sidebarTab === 'fixtures' && <FixturePickerPanel />}
+
       {/* Templates Tab */}
       {sidebarTab === 'templates' && <TemplatePanel />}
 
@@ -182,18 +202,20 @@ export default function LeftSidebar() {
       {sidebarTab === 'finishes' && (
         <div className="sidebar-section finishes-section">
           {!selectedRoom && (
-            <p className="no-room-hint">Select a room to apply finishes</p>
+            <p className="no-room-hint">{t('editor.finishes.selectRoomFirst')}</p>
           )}
 
-          {selectedRoom && FINISH_SECTIONS.map(({ type, label }) => {
+          {selectedRoom && FINISH_TYPES.map((type) => {
             const materials = finishMaterials.filter((m) => m.type === type)
             const selectedId = selectedRoom.finishes?.[type]?.material_id
+            const label = t(`editor.finishes.${type}`)
+            const typeLabel = t(`editor.finishes.${type}`).toLowerCase()
 
             return (
               <div key={type} className="finish-group">
                 <div className="finish-group-header">
                   <span className="section-title">{label}</span>
-                  <label className="upload-label" title={`Upload custom ${type}`}>
+                  <label className="upload-label" title={t('editor.finishes.uploadCustom', { type: typeLabel })}>
                     <Upload size={12} />
                     <input
                       ref={(el) => { fileInputRefs.current[type] = el }}
@@ -260,11 +282,26 @@ export default function LeftSidebar() {
           cursor: pointer;
           border-bottom: 2px solid transparent;
           transition: all 0.15s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .sidebar-tab.active {
           color: var(--color-primary-brand);
           border-bottom-color: var(--color-primary-brand);
+        }
+
+        .sidebar-title-bar {
+          padding: 10px 14px;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+          color: var(--color-text-primary);
+          background: var(--color-panel-bg);
+          border-bottom: 1px solid var(--color-border-custom);
+          flex-shrink: 0;
         }
 
         .sidebar-section {
@@ -278,6 +315,10 @@ export default function LeftSidebar() {
           align-items: center;
           justify-content: space-between;
           margin-bottom: 8px;
+        }
+
+        .section-header--end {
+          justify-content: flex-end;
         }
 
         .section-title {

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { X, Download, Save, Loader2, AlertTriangle, Zap, Sparkles, Square } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { renderRoomPreview, type RenderMode } from '@/lib/renderRoomPreview'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
@@ -12,6 +13,7 @@ import type { FurnitureItem } from '@/types'
 type PreviewStatus = 'idle' | 'rendering' | 'building_scene' | 'path_tracing' | 'complete' | 'error'
 
 export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [status, setStatus] = useState<PreviewStatus>('idle')
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -35,7 +37,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
 
   const renderPreview = useCallback(async (wallIdx: number, mode: RenderMode) => {
     if (!room) {
-      setError('No room selected')
+      setError(t('roomPreview.errorNoRoom'))
       setStatus('error')
       return
     }
@@ -91,7 +93,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
     if (result.error === 'Cancelled') return
 
     if (result.error || !result.blob) {
-      setError(result.error ?? 'Render failed')
+      setError(result.error ?? t('roomPreview.errorRenderFailed'))
       setStatus('error')
       return
     }
@@ -104,7 +106,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
     setProgressImageUrl(null)
     setStatus('complete')
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room, finishMaterials])
+  }, [room, finishMaterials, t])
 
   // Initial render
   useEffect(() => {
@@ -163,15 +165,20 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
       })
 
       if (uploadErr || !publicUrl) {
-        showToast('Failed to save preview: ' + (uploadErr ?? 'unknown error'), 'error')
+        showToast(
+          t('roomPreview.saveErrorWithDetail', {
+            error: uploadErr ?? t('roomPreview.unknownError'),
+          }),
+          'error',
+        )
         setIsSaving(false)
         return
       }
 
       await updateRoom(room.id, { preview_image_url: publicUrl })
-      showToast('Preview saved to project', 'success')
+      showToast(t('roomPreview.saved'), 'success')
     } catch (err) {
-      showToast('Save failed: ' + String(err), 'error')
+      showToast(t('roomPreview.saveFailed', { error: String(err) }), 'error')
     } finally {
       setIsSaving(false)
     }
@@ -185,7 +192,11 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
       <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="preview-header">
-          <span className="preview-title">Room Preview — {room?.name ?? 'Room'}</span>
+          <span className="preview-title">
+            {t('roomPreview.titleWithRoom', {
+              name: room?.name ?? t('roomPreview.fallbackRoomName'),
+            })}
+          </span>
           <button className="preview-close" onClick={onClose}>
             <X size={18} />
           </button>
@@ -201,7 +212,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
                 onClick={() => handleWallChange(i)}
                 disabled={isRendering}
               >
-                Wall {i + 1}
+                {t('roomPreview.wallLabel', { index: i + 1 })}
               </button>
             ))}
           </div>
@@ -213,7 +224,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
               disabled={isRendering}
             >
               <Zap size={12} />
-              Fast
+              {t('roomPreview.modeFast')}
             </button>
             <button
               className={`preview-mode-btn ${renderMode === 'hd' ? 'active' : ''}`}
@@ -221,7 +232,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
               disabled={isRendering}
             >
               <Sparkles size={12} />
-              HD
+              {t('roomPreview.modeHd')}
             </button>
           </div>
         </div>
@@ -232,8 +243,8 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           {status === 'rendering' && (
             <div className="preview-loading">
               <Loader2 size={32} className="preview-spinner" />
-              <p>Rendering room preview…</p>
-              <p className="preview-loading-hint">Loading 3D models and building the scene</p>
+              <p>{t('roomPreview.renderingTitle')}</p>
+              <p className="preview-loading-hint">{t('roomPreview.renderingHint')}</p>
             </div>
           )}
 
@@ -241,8 +252,8 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           {status === 'building_scene' && (
             <div className="preview-loading">
               <Loader2 size={32} className="preview-spinner" />
-              <p>Preparing HD render…</p>
-              <p className="preview-loading-hint">Building ray tracing acceleration structure</p>
+              <p>{t('roomPreview.hdPreparingTitle')}</p>
+              <p className="preview-loading-hint">{t('roomPreview.hdPreparingHint')}</p>
             </div>
           )}
 
@@ -250,7 +261,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           {status === 'error' && (
             <div className="preview-error">
               <AlertTriangle size={32} />
-              <p>Preview failed</p>
+              <p>{t('roomPreview.errorTitle')}</p>
               <p className="preview-error-detail">{error}</p>
             </div>
           )}
@@ -261,12 +272,12 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
               {warnings.length > 0 && (
                 <div className="preview-warnings">
                   <AlertTriangle size={14} />
-                  <span>{warnings.length} item{warnings.length !== 1 ? 's' : ''} could not be rendered (missing 3D models)</span>
+                  <span>{t('roomPreview.missingModels', { count: warnings.length })}</span>
                 </div>
               )}
               <img
                 src={progressImageUrl}
-                alt="HD render in progress"
+                alt={t('roomPreview.hdInProgressAlt')}
                 className="preview-image"
               />
               <div className="preview-hd-progress">
@@ -277,10 +288,15 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
                   />
                 </div>
                 <div className="hd-progress-text">
-                  <span>HD Rendering: {hdProgress.samples} / {hdProgress.total} samples</span>
+                  <span>
+                    {t('roomPreview.hdProgress', {
+                      samples: hdProgress.samples,
+                      total: hdProgress.total,
+                    })}
+                  </span>
                   <button className="hd-stop-btn" onClick={handleStop}>
                     <Square size={10} />
-                    Stop & Use Current
+                    {t('roomPreview.stopButton')}
                   </button>
                 </div>
               </div>
@@ -293,12 +309,12 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
               {warnings.length > 0 && (
                 <div className="preview-warnings">
                   <AlertTriangle size={14} />
-                  <span>{warnings.length} item{warnings.length !== 1 ? 's' : ''} could not be rendered (missing 3D models)</span>
+                  <span>{t('roomPreview.missingModels', { count: warnings.length })}</span>
                 </div>
               )}
               <img
                 src={displayImage}
-                alt="Room perspective preview"
+                alt={t('roomPreview.previewImageAlt')}
                 className="preview-image"
               />
             </>
@@ -310,7 +326,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
           <div className="preview-footer">
             <button className="preview-download-btn" onClick={handleDownload}>
               <Download size={14} />
-              Download PNG
+              {t('roomPreview.downloadPng')}
             </button>
             <button
               className="preview-save-btn"
@@ -318,7 +334,7 @@ export default function RoomPreviewModal({ onClose }: { onClose: () => void }) {
               disabled={isSaving}
             >
               <Save size={14} />
-              {isSaving ? 'Saving…' : 'Save to Project'}
+              {isSaving ? t('roomPreview.savingButton') : t('roomPreview.saveToProject')}
             </button>
           </div>
         )}

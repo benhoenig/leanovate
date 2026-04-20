@@ -1,10 +1,17 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { X, Link, Loader2, Upload, Plus, Trash2, ChevronRight, Camera, ImageIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { X, Link, Loader2, Upload, Plus, Trash2, ChevronRight, Camera, ImageIcon, Info } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 interface Props {
   onClose: () => void
+  /**
+   * Optional category filter. When 'wall', only wall-mount categories are shown
+   * and the screenshot/link-scrape flow is skipped. Used by FixturePickerPanel
+   * to open the modal pre-configured for door/window uploads.
+   */
+  mountTypeFilter?: 'floor' | 'wall'
 }
 
 // ── Extracted data shape (matches edge function response) ─────────────────────
@@ -62,8 +69,12 @@ function newImageDraft(file: File): ImageDraft {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function AddFurnitureModal({ onClose }: Props) {
+export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }: Props) {
+  const { t } = useTranslation()
   const { categories, styles, createItem, createVariant, loadCategories, loadStyles } = useCatalogStore()
+
+  const isWallMode = mountTypeFilter === 'wall'
+  const visibleCategories = categories.filter((c) => (c.mount_type ?? 'floor') === mountTypeFilter)
 
   // Ensure categories and styles are loaded (in case modal opens before CatalogPanel mounts)
   useEffect(() => {
@@ -191,7 +202,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
       if (!resp.ok) {
         const text = await resp.text()
         console.error('[Extract] HTTP error:', resp.status, text)
-        setExtractError(`Extraction failed (HTTP ${resp.status})`)
+        setExtractError(t('addFurniture.extractErrorHttp', { status: resp.status }))
         return
       }
 
@@ -220,7 +231,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
       }
     } catch (err) {
       console.error('[Extract] Network/fetch error:', err)
-      setExtractError('Could not reach the extraction service. Fill in details manually.')
+      setExtractError(t('addFurniture.extractErrorNetwork'))
     } finally {
       setIsExtracting(false)
       console.log('[Extract] Done')
@@ -245,7 +256,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
       })
       console.log('[AddFurniture] createItem result:', { id, error })
       if (error || !id) {
-        showToast(error ?? 'Failed to save item', 'error')
+        showToast(error ?? t('addFurniture.errorSaveItem'), 'error')
         return
       }
       // Set style tags
@@ -256,7 +267,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
       setStep(2)
     } catch (err) {
       console.error('[AddFurniture] Unexpected error:', err)
-      showToast('Something went wrong: ' + String(err), 'error')
+      showToast(t('addFurniture.errorGeneric', { detail: String(err) }), 'error')
     } finally {
       setIsSavingItem(false)
     }
@@ -321,7 +332,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
     if (!createdItemId) return
     const validVariants = variants.filter((v) => v.color_name.trim() && v.images.length > 0)
     if (validVariants.length === 0) {
-      showToast('Add at least one color variant with an image', 'warning')
+      showToast(t('addFurniture.errorNeedVariantImage'), 'warning')
       return
     }
 
@@ -344,7 +355,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
             img.file
           )
           if (error || !imageUrl) {
-            uploadError = error ?? 'Upload failed'
+            uploadError = error ?? t('addFurniture.errorUploadFailed')
             break
           }
           imageUrls.push(imageUrl)
@@ -373,7 +384,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
         if (createError || !variantId) {
           setVariants((prev) =>
-            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: createError ?? 'Failed' } : v))
+            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: createError ?? t('addFurniture.errorVariantFailed') } : v))
           )
           continue
         }
@@ -386,14 +397,14 @@ export default function AddFurnitureModal({ onClose }: Props) {
       const isFlat = useCatalogStore.getState().isItemFlat(createdItemId)
       showToast(
         isFlat
-          ? 'Flat item added — ready to place on canvas.'
-          : 'Furniture added! Generating 3D models…',
+          ? t('addFurniture.toastFlatReady')
+          : t('addFurniture.toastGenerating'),
         'success'
       )
       onClose()
     } catch (err) {
       console.error('[SaveVariants] Unexpected error:', err)
-      showToast('Something went wrong: ' + String(err), 'error')
+      showToast(t('addFurniture.errorGeneric', { detail: String(err) }), 'error')
     } finally {
       setIsSavingVariants(false)
     }
@@ -414,9 +425,9 @@ export default function AddFurnitureModal({ onClose }: Props) {
         {/* Header */}
         <div className="modal-header">
           <div className="modal-title-wrap">
-            <span className="modal-step-badge">Step {step} of 2</span>
+            <span className="modal-step-badge">{t('addFurniture.stepOfTwo', { step })}</span>
             <h2 className="modal-title">
-              {step === 1 ? 'Add Furniture — Product Details' : 'Add Color Variants'}
+              {step === 1 ? t('addFurniture.step1Heading') : t('addFurniture.step2Heading')}
             </h2>
           </div>
           <button className="modal-close-btn" onClick={onClose}>
@@ -427,9 +438,10 @@ export default function AddFurnitureModal({ onClose }: Props) {
         {/* Step 1 */}
         {step === 1 && (
           <div className="modal-body">
-            {/* Screenshot drop zone */}
+            {/* Screenshot drop zone — hidden for wall fixtures (admin-uploaded, no purchase link) */}
+            {!isWallMode && (
             <div className="field-group">
-              <label className="field-label">Product Screenshot</label>
+              <label className="field-label">{t('addFurniture.screenshotLabel')}</label>
               <input
                 ref={screenshotInputRef}
                 type="file"
@@ -443,14 +455,14 @@ export default function AddFurnitureModal({ onClose }: Props) {
               />
               {screenshotPreview ? (
                 <div className="screenshot-preview-wrap">
-                  <img src={screenshotPreview} alt="Product screenshot" className="screenshot-preview-img" />
+                  <img src={screenshotPreview} alt={t('addFurniture.screenshotAlt')} className="screenshot-preview-img" />
                   <div className="screenshot-preview-actions">
                     <button
                       className="screenshot-change-btn"
                       onClick={() => screenshotInputRef.current?.click()}
                     >
                       <ImageIcon size={12} />
-                      Change
+                      {t('addFurniture.screenshotChange')}
                     </button>
                     <button
                       className="btn-primary extract-btn"
@@ -458,7 +470,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
                       disabled={isExtracting}
                     >
                       {isExtracting ? <Loader2 size={13} className="spin" /> : <Camera size={13} />}
-                      {isExtracting ? 'Extracting…' : 'Extract Details'}
+                      {isExtracting ? t('addFurniture.screenshotExtracting') : t('addFurniture.screenshotExtract')}
                     </button>
                   </div>
                 </div>
@@ -471,39 +483,42 @@ export default function AddFurnitureModal({ onClose }: Props) {
                   onDrop={handleDrop}
                 >
                   <Camera size={24} />
-                  <span className="screenshot-drop-title">Drop product screenshot here</span>
-                  <span className="screenshot-drop-hint">or click to upload — also supports Ctrl+V paste</span>
-                  <span className="screenshot-drop-hint">Works with Shopee, IKEA, or any furniture site</span>
+                  <span className="screenshot-drop-title">{t('addFurniture.screenshotDropTitle')}</span>
+                  <span className="screenshot-drop-hint">{t('addFurniture.screenshotDropHintA')}</span>
+                  <span className="screenshot-drop-hint">{t('addFurniture.screenshotDropHintB')}</span>
                 </div>
               )}
               {extractError && (
-                <p className="field-hint error">{extractError} — fill in details manually below.</p>
+                <p className="field-hint error">{extractError}{t('addFurniture.extractErrorSuffix')}</p>
               )}
               {extracted && !extractError && (
-                <p className="field-hint success">Details extracted from screenshot. Review and edit below.</p>
+                <p className="field-hint success">{t('addFurniture.extractSuccess')}</p>
               )}
             </div>
+            )}
 
-            {/* Product Link (reference for purchasing) */}
+            {/* Product Link (reference for purchasing) — hidden for wall fixtures */}
+            {!isWallMode && (
             <div className="field-group">
-              <label className="field-label">Product Link (for purchasing reference)</label>
+              <label className="field-label">{t('addFurniture.productLinkLabel')}</label>
               <div className="url-input-wrap">
                 <Link size={13} className="url-icon" />
                 <input
                   className="url-input"
-                  placeholder="https://shopee.co.th/… or https://ikea.com/…"
+                  placeholder={t('addFurniture.productLinkPlaceholder')}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                 />
               </div>
             </div>
+            )}
 
             {/* Name */}
             <div className="field-group">
-              <label className="field-label">Product Name *</label>
+              <label className="field-label">{t('addFurniture.productNameLabel')}</label>
               <input
                 className="field-input"
-                placeholder="e.g. KIVIK Sofa"
+                placeholder={t('addFurniture.productNamePlaceholder')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -511,14 +526,14 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
             {/* Category */}
             <div className="field-group">
-              <label className="field-label">Category *</label>
+              <label className="field-label">{t('addFurniture.categoryLabel')}</label>
               <select
                 className="field-input"
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
               >
-                <option value="">Select category…</option>
-                {categories.map((c) => (
+                <option value="">{t('addFurniture.categoryOptionPlaceholder')}</option>
+                {visibleCategories.map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
@@ -526,10 +541,10 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
             {/* Description */}
             <div className="field-group">
-              <label className="field-label">Description</label>
+              <label className="field-label">{t('addFurniture.descriptionLabelStep1')}</label>
               <textarea
                 className="field-input field-textarea"
-                placeholder="Product description…"
+                placeholder={t('addFurniture.descriptionFieldPlaceholder')}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
@@ -539,22 +554,23 @@ export default function AddFurnitureModal({ onClose }: Props) {
             {/* Dimensions */}
             <div className="field-row-3">
               <div className="field-group">
-                <label className="field-label">Width (cm)</label>
+                <label className="field-label">{t('addFurniture.widthCmLabel')}</label>
                 <input className="field-input" type="number" placeholder="—" value={widthCm} onChange={(e) => setWidthCm(e.target.value)} />
               </div>
               <div className="field-group">
-                <label className="field-label">Depth (cm)</label>
+                <label className="field-label">{t('addFurniture.depthCmLabel')}</label>
                 <input className="field-input" type="number" placeholder="—" value={depthCm} onChange={(e) => setDepthCm(e.target.value)} />
               </div>
               <div className="field-group">
-                <label className="field-label">Height (cm)</label>
+                <label className="field-label">{t('addFurniture.heightCmLabel')}</label>
                 <input className="field-input" type="number" placeholder="—" value={heightCm} onChange={(e) => setHeightCm(e.target.value)} />
               </div>
             </div>
 
-            {/* Style tags */}
+            {/* Style tags — wall fixtures aren't style-tagged (they're architectural) */}
+            {!isWallMode && (
             <div className="field-group">
-              <label className="field-label">Style Tags</label>
+              <label className="field-label">{t('addFurniture.styleTagsLabel')}</label>
               <div className="style-pills-wrap">
                 {styles.map((s) => (
                   <button
@@ -568,17 +584,18 @@ export default function AddFurnitureModal({ onClose }: Props) {
                 ))}
               </div>
             </div>
+            )}
 
             {/* Footer */}
             <div className="modal-footer">
-              <button className="btn-ghost" onClick={onClose}>Cancel</button>
+              <button className="btn-ghost" onClick={onClose}>{t('addFurniture.cancel')}</button>
               <button
                 className="btn-primary"
                 onClick={handleStep1Submit}
                 disabled={!name.trim() || !categoryId || isSavingItem}
               >
                 {isSavingItem ? <Loader2 size={13} className="spin" /> : null}
-                Save & Add Colors
+                {t('addFurniture.saveAndAddColors')}
                 <ChevronRight size={14} />
               </button>
             </div>
@@ -586,19 +603,42 @@ export default function AddFurnitureModal({ onClose }: Props) {
         )}
 
         {/* Step 2 */}
-        {step === 2 && (
+        {step === 2 && (() => {
+          const selectedCategory = categories.find((c) => c.id === categoryId)
+          const isFlat = selectedCategory?.is_flat === true
+          return (
           <div className="modal-body">
+            {isFlat && (
+              <div className="flat-banner">
+                <Info size={16} className="flat-banner-icon" />
+                <div className="flat-banner-body">
+                  <div className="flat-banner-title">
+                    {t('addFurniture.flatBannerTitle', { category: selectedCategory?.name ?? '' })}
+                  </div>
+                  <div className="flat-banner-text">{t('addFurniture.flatBannerIntro')}</div>
+                  <ul className="flat-banner-list">
+                    <li>{t('addFurniture.flatBannerRulePng')}</li>
+                    <li>{t('addFurniture.flatBannerRuleTopDown')}</li>
+                    <li>{t('addFurniture.flatBannerRuleSingle')}</li>
+                  </ul>
+                  <div className="flat-banner-prompt-label">
+                    {t('addFurniture.flatBannerPromptLabel')}
+                  </div>
+                  <code className="flat-banner-prompt">
+                    {t('addFurniture.flatBannerPrompt', { category: selectedCategory?.name ?? 'item' })}
+                  </code>
+                </div>
+              </div>
+            )}
             <p className="step2-hint">
-              Add one or more color variants. For each variant, upload 2–4 clean product shots from different angles — this
-              is the biggest quality lever for 3D generation. The first image is used as the placeholder until the 3D
-              model is ready.
+              {isFlat ? t('addFurniture.step2HintFlat') : t('addFurniture.step2Hint')}
             </p>
 
             <div className="variants-list">
               {variants.map((draft, idx) => (
                 <div key={draft.id} className="variant-card">
                   <div className="variant-header">
-                    <span className="variant-num">Variant {idx + 1}</span>
+                    <span className="variant-num">{t('addFurniture.variantNumber', { num: idx + 1 })}</span>
                     {variants.length > 1 && (
                       <button className="variant-remove-btn" onClick={() => handleRemoveVariant(draft.id)}>
                         <Trash2 size={12} />
@@ -608,7 +648,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
                   {/* Images row */}
                   <div className="field-group">
-                    <label className="field-label">Product Images ({draft.images.length})</label>
+                    <label className="field-label">{t('addFurniture.productImagesCount', { count: draft.images.length })}</label>
                     <input
                       ref={(el) => { fileInputRefs.current[draft.id] = el }}
                       type="file"
@@ -625,13 +665,13 @@ export default function AddFurnitureModal({ onClose }: Props) {
                     <div className="variant-images-row">
                       {draft.images.map((img, imgIdx) => (
                         <div key={img.id} className="variant-image-thumb">
-                          <img src={img.previewUrl} alt={`img ${imgIdx + 1}`} />
-                          {imgIdx === 0 && <span className="variant-image-primary">1st</span>}
+                          <img src={img.previewUrl} alt={t('addFurniture.imageAlt', { num: imgIdx + 1 })} />
+                          {imgIdx === 0 && <span className="variant-image-primary">{t('addFurniture.firstImageBadge')}</span>}
                           <div className="variant-image-thumb-actions">
                             {imgIdx > 0 && (
                               <button
                                 className="variant-image-reorder-btn"
-                                title="Move left"
+                                title={t('addFurniture.moveLeft')}
                                 onClick={() => handleVariantImageReorder(draft.id, img.id, 'left')}
                               >
                                 ◀
@@ -640,7 +680,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
                             {imgIdx < draft.images.length - 1 && (
                               <button
                                 className="variant-image-reorder-btn"
-                                title="Move right"
+                                title={t('addFurniture.moveRight')}
                                 onClick={() => handleVariantImageReorder(draft.id, img.id, 'right')}
                               >
                                 ▶
@@ -648,7 +688,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
                             )}
                             <button
                               className="variant-image-remove-btn"
-                              title="Remove"
+                              title={t('addFurniture.removeAction')}
                               onClick={() => handleVariantImageRemove(draft.id, img.id)}
                             >
                               <Trash2 size={10} />
@@ -670,22 +710,22 @@ export default function AddFurnitureModal({ onClose }: Props) {
                         disabled={draft.uploading}
                       >
                         <Upload size={16} />
-                        <span>Add images</span>
+                        <span>{t('addFurniture.addImages')}</span>
                       </button>
                     </div>
                     {draft.images.length === 0 && (
                       <span className="field-hint">
-                        Upload clean product shots (front, 3/4 angle, side) for best results.
+                        {t('addFurniture.emptyImageHint')}
                       </span>
                     )}
                   </div>
 
                   {/* Text fields */}
                   <div className="field-group">
-                    <label className="field-label">Color Name *</label>
+                    <label className="field-label">{t('addFurniture.colorNameLabel')}</label>
                     <input
                       className="field-input"
-                      placeholder="e.g. Navy Blue, Oak Natural…"
+                      placeholder={t('addFurniture.colorNamePlaceholderLong')}
                       value={draft.color_name}
                       onChange={(e) =>
                         setVariants((prev) =>
@@ -694,13 +734,13 @@ export default function AddFurnitureModal({ onClose }: Props) {
                       }
                     />
                   </div>
-                  <div className="field-row-2">
+                  <div className={isWallMode ? 'field-group' : 'field-row-2'}>
                     <div className="field-group">
-                      <label className="field-label">Price (฿)</label>
+                      <label className="field-label">{t('addFurniture.priceLabel')}</label>
                       <input
                         className="field-input"
                         type="number"
-                        placeholder="Optional"
+                        placeholder={t('addFurniture.priceOptional')}
                         value={draft.price_thb}
                         onChange={(e) =>
                           setVariants((prev) =>
@@ -709,11 +749,12 @@ export default function AddFurnitureModal({ onClose }: Props) {
                         }
                       />
                     </div>
+                    {!isWallMode && (
                     <div className="field-group">
-                      <label className="field-label">Variant Link</label>
+                      <label className="field-label">{t('addFurniture.variantLinkLabel')}</label>
                       <input
                         className="field-input"
-                        placeholder="Optional"
+                        placeholder={t('addFurniture.variantLinkOptional')}
                         value={draft.source_url}
                         onChange={(e) =>
                           setVariants((prev) =>
@@ -722,6 +763,7 @@ export default function AddFurnitureModal({ onClose }: Props) {
                         }
                       />
                     </div>
+                    )}
                   </div>
 
                   {draft.error && <p className="variant-error">{draft.error}</p>}
@@ -730,23 +772,24 @@ export default function AddFurnitureModal({ onClose }: Props) {
 
               <button className="add-variant-btn" onClick={handleAddVariant}>
                 <Plus size={14} />
-                Add Another Color
+                {t('addFurniture.addAnotherColor')}
               </button>
             </div>
 
             <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setStep(1)}>Back</button>
+              <button className="btn-ghost" onClick={() => setStep(1)}>{t('addFurniture.backButton')}</button>
               <button
                 className="btn-primary"
                 onClick={handleSaveVariants}
                 disabled={isSavingVariants || variants.every((v) => !v.color_name.trim() || v.images.length === 0)}
               >
                 {isSavingVariants ? <Loader2 size={13} className="spin" /> : null}
-                Save Variants
+                {t('addFurniture.saveVariants')}
               </button>
             </div>
           </div>
-        )}
+          )
+        })()}
       </div>
 
       <style>{`
@@ -1256,6 +1299,68 @@ export default function AddFurnitureModal({ onClose }: Props) {
         }
         .add-variant-btn:hover {
           background: rgba(43, 168, 160, 0.12);
+        }
+
+        .flat-banner {
+          display: flex;
+          gap: 10px;
+          padding: 12px;
+          border-radius: 10px;
+          background: var(--color-warning-bg);
+          border: 1px solid rgba(245, 166, 35, 0.25);
+        }
+        .flat-banner-icon {
+          color: var(--color-warning);
+          flex-shrink: 0;
+          margin-top: 1px;
+        }
+        .flat-banner-body {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          min-width: 0;
+        }
+        .flat-banner-title {
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--color-warning-text);
+          letter-spacing: 0.2px;
+        }
+        .flat-banner-text {
+          font-size: 12px;
+          color: var(--color-warning-text);
+          line-height: 1.5;
+        }
+        .flat-banner-list {
+          margin: 2px 0 0;
+          padding-left: 18px;
+          font-size: 12px;
+          color: var(--color-warning-text);
+          line-height: 1.55;
+        }
+        .flat-banner-list li {
+          margin-bottom: 2px;
+        }
+        .flat-banner-prompt-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--color-warning-text);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-top: 4px;
+        }
+        .flat-banner-prompt {
+          display: block;
+          font-size: 11px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          color: var(--color-text-primary);
+          background: rgba(255, 255, 255, 0.6);
+          border: 1px solid rgba(245, 166, 35, 0.3);
+          border-radius: 6px;
+          padding: 8px 10px;
+          line-height: 1.5;
+          white-space: pre-wrap;
+          word-break: break-word;
         }
 
         @keyframes spin {

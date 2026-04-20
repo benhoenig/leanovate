@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Cpu, DollarSign, Zap, TrendingUp } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
@@ -33,9 +34,26 @@ const EMPTY_SUMMARY: UsageSummary = {
 }
 
 export default function AIUsageOverview() {
+  const { t, i18n } = useTranslation()
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
   const [rows, setRows] = useState<UsageRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [period, setPeriod] = useState<'7d' | '30d' | 'all'>('30d')
+
+  const formatTime = (iso: string): string => {
+    const d = new Date(iso)
+    const now = new Date()
+    const diffMs = now.getTime() - d.getTime()
+    const diffMin = Math.floor(diffMs / 60000)
+
+    if (diffMin < 1) return t('admin.aiUsage.justNow')
+    if (diffMin < 60) return t('admin.aiUsage.minutesAgo', { count: diffMin })
+
+    const diffHr = Math.floor(diffMin / 60)
+    if (diffHr < 24) return t('admin.aiUsage.hoursAgo', { count: diffHr })
+
+    return d.toLocaleDateString(localeTag, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+  }
 
   const loadUsage = useCallback(async () => {
     setIsLoading(true)
@@ -101,7 +119,7 @@ export default function AIUsageOverview() {
             className={`period-pill ${period === p ? 'active' : ''}`}
             onClick={() => setPeriod(p)}
           >
-            {p === '7d' ? '7 Days' : p === '30d' ? '30 Days' : 'All Time'}
+            {p === '7d' ? t('admin.aiUsage.period7d') : p === '30d' ? t('admin.aiUsage.period30d') : t('admin.aiUsage.periodAll')}
           </button>
         ))}
       </div>
@@ -111,29 +129,29 @@ export default function AIUsageOverview() {
         <div className="usage-card">
           <div className="usage-card-icon calls"><Zap size={16} /></div>
           <div className="usage-card-body">
-            <span className="usage-card-value">{summary.totalCalls.toLocaleString()}</span>
-            <span className="usage-card-label">API Calls</span>
+            <span className="usage-card-value">{summary.totalCalls.toLocaleString(localeTag)}</span>
+            <span className="usage-card-label">{t('admin.aiUsage.apiCalls')}</span>
           </div>
         </div>
         <div className="usage-card">
           <div className="usage-card-icon tokens"><Cpu size={16} /></div>
           <div className="usage-card-body">
-            <span className="usage-card-value">{summary.totalTokens.toLocaleString()}</span>
-            <span className="usage-card-label">Total Tokens</span>
+            <span className="usage-card-value">{summary.totalTokens.toLocaleString(localeTag)}</span>
+            <span className="usage-card-label">{t('admin.aiUsage.totalTokens')}</span>
           </div>
         </div>
         <div className="usage-card">
           <div className="usage-card-icon cost"><DollarSign size={16} /></div>
           <div className="usage-card-body">
             <span className="usage-card-value">${summary.totalCostUsd.toFixed(4)}</span>
-            <span className="usage-card-label">Cost (USD)</span>
+            <span className="usage-card-label">{t('admin.aiUsage.costUsd')}</span>
           </div>
         </div>
         <div className="usage-card">
           <div className="usage-card-icon thb"><TrendingUp size={16} /></div>
           <div className="usage-card-body">
             <span className="usage-card-value">฿{costThb.toFixed(2)}</span>
-            <span className="usage-card-label">Cost (THB)</span>
+            <span className="usage-card-label">{t('admin.aiUsage.costThb')}</span>
           </div>
         </div>
       </div>
@@ -141,24 +159,24 @@ export default function AIUsageOverview() {
       {/* Usage log table */}
       <div className="usage-table-wrap">
         <div className="usage-table-header">
-          <span className="usage-table-title">Usage Log</span>
-          <span className="usage-table-count">{rows.length} entries</span>
+          <span className="usage-table-title">{t('admin.aiUsage.usageLog')}</span>
+          <span className="usage-table-count">{t('admin.aiUsage.entriesCount', { count: rows.length })}</span>
         </div>
         {isLoading ? (
-          <div className="usage-loading">Loading…</div>
+          <div className="usage-loading">{t('admin.aiUsage.loading')}</div>
         ) : rows.length === 0 ? (
-          <div className="usage-empty">No usage data yet.</div>
+          <div className="usage-empty">{t('admin.aiUsage.noData')}</div>
         ) : (
           <div className="usage-table-scroll">
             <table className="usage-table">
               <thead>
                 <tr>
-                  <th>Time</th>
-                  <th>User</th>
-                  <th>Function</th>
-                  <th className="right">Input</th>
-                  <th className="right">Output</th>
-                  <th className="right">Cost</th>
+                  <th>{t('admin.aiUsage.colTime')}</th>
+                  <th>{t('admin.aiUsage.colUser')}</th>
+                  <th>{t('admin.aiUsage.colFunction')}</th>
+                  <th className="right">{t('admin.aiUsage.colInput')}</th>
+                  <th className="right">{t('admin.aiUsage.colOutput')}</th>
+                  <th className="right">{t('admin.aiUsage.colCost')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -167,8 +185,8 @@ export default function AIUsageOverview() {
                     <td className="cell-time">{formatTime(row.created_at)}</td>
                     <td>{row.user_name || '—'}</td>
                     <td><span className="fn-badge">{row.function_name}</span></td>
-                    <td className="right mono">{row.input_tokens.toLocaleString()}</td>
-                    <td className="right mono">{row.output_tokens.toLocaleString()}</td>
+                    <td className="right mono">{row.input_tokens.toLocaleString(localeTag)}</td>
+                    <td className="right mono">{row.output_tokens.toLocaleString(localeTag)}</td>
                     <td className="right mono">${row.cost_usd.toFixed(4)}</td>
                   </tr>
                 ))}
@@ -333,17 +351,3 @@ export default function AIUsageOverview() {
   )
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
-
-  const diffHr = Math.floor(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
-
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-}

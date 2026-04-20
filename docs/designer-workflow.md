@@ -53,7 +53,36 @@ The 2–4 clean Gemini outputs. In the Add Furniture modal, upload all of them t
 
 - **If the source photo is already clean** (seller used a studio shot), you can skip Gemini and upload directly — single image mode works, just lower quality than multi-angle.
 - **If Gemini outputs one angle well but another is distorted**, keep the good ones and drop the bad. Better to give TRELLIS 2 clean shots than 4 mixed-quality shots.
-- **If the product is flat** (rug, wall art, curtains), skip all of this. Mark the category as `is_flat` (or set `is_flat_override` on the item) and upload a single clean shot — TRELLIS is bypassed entirely.
+- **If the product is flat** (rug, wall art, curtains), skip all of this — TRELLIS is bypassed entirely. See the next section for the flat-item upload rules.
+
+---
+
+## Flat items (rugs, wall art, curtains, bedding, mirrors)
+
+Flat items render as a flat textured plane on the floor (rugs) or vertically on a wall (wall art). TRELLIS is bypassed, which means **there is no automatic background removal**. Whatever you upload shows up on the canvas exactly as-is — if the photo has a white studio background, you will see a white square around the rug.
+
+### Upload rules for flat items
+
+1. **PNG with transparent background only.** Not a JPG. Not a white-background product shot. The alpha channel is what makes the item blend cleanly into the floor / wall.
+2. **Straight-on angle.** Rugs: top-down (bird's-eye). Wall art: head-on (perpendicular to the canvas). Angled lifestyle shots will look wrong when laid flat.
+3. **Crop tight.** No shadow, no floor texture around it, no frame. The PNG's bounding box becomes the item's footprint on the canvas.
+4. **First image is the only one used.** You can upload more for reference but the canvas only reads image 1.
+
+### Prepping flat items via Nano Banana
+
+Open Google Gemini, upload the source photo, and paste:
+
+```
+Isolate only the [rug/artwork/etc.] from this image. Output a single
+top-down view on a fully transparent background as a PNG. Crop tight
+to the item with no shadow or background elements.
+```
+
+Save the result as PNG (confirm transparency is preserved — right-click → Save As → PNG). Upload that PNG as variant image 1 in Leanovate.
+
+### If a non-flat category has a flat-ish item
+
+e.g. a very thin headboard in the Bed category. Toggle `is_flat_override = true` on the item and follow the flat-item rules above.
 
 ---
 

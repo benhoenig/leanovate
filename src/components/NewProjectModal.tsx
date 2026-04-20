@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 export default function NewProjectModal() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { createProject } = useProjectStore()
   const { closeModal, showToast } = useUIStore()
 
@@ -22,10 +24,10 @@ export default function NewProjectModal() {
     const { id, error: err } = await createProject(name.trim(), description.trim() || undefined)
     setIsSubmitting(false)
     if (err || !id) {
-      setError(err ?? 'Failed to create project')
+      setError(err ?? t('dashboard.errorCreateFailed'))
       return
     }
-    showToast('Project created', 'success')
+    showToast(t('toasts.projectCreated'), 'success')
     closeModal()
     navigate(`/editor/${id}`)
   }
@@ -34,7 +36,7 @@ export default function NewProjectModal() {
     <div className="modal-overlay" onClick={closeModal}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 className="modal-title">New Project</h2>
+          <h2 className="modal-title">{t('dashboard.newProjectTitle')}</h2>
           <button className="modal-close" onClick={closeModal}>
             <X size={16} />
           </button>
@@ -42,11 +44,11 @@ export default function NewProjectModal() {
 
         <form onSubmit={handleSubmit} className="modal-body">
           <div className="field">
-            <label className="field-label">Project Name *</label>
+            <label className="field-label">{t('dashboard.projectNameLabel')}</label>
             <input
               className="field-input"
               type="text"
-              placeholder="e.g. Unit 1204 — Ideo Mobi Sukhumvit"
+              placeholder={t('dashboard.projectNamePlaceholder')}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
@@ -55,10 +57,10 @@ export default function NewProjectModal() {
           </div>
 
           <div className="field">
-            <label className="field-label">Description</label>
+            <label className="field-label">{t('dashboard.descriptionLabel')}</label>
             <textarea
               className="field-input field-textarea"
-              placeholder="Internal notes (optional)"
+              placeholder={t('dashboard.descriptionPlaceholder')}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
@@ -70,10 +72,10 @@ export default function NewProjectModal() {
 
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={closeModal}>
-              Cancel
+              {t('common.cancel')}
             </button>
             <button type="submit" className="btn-primary" disabled={!name.trim() || isSubmitting}>
-              {isSubmitting ? 'Creating…' : 'Create Project'}
+              {isSubmitting ? t('dashboard.creating') : t('dashboard.createProjectSubmit')}
             </button>
           </div>
         </form>

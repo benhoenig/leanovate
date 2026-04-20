@@ -1,4 +1,6 @@
 import { AlertTriangle, LinkIcon, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import i18n from '@/lib/i18n'
 import type { StalenessAlert } from '@/types'
 
 interface Props {
@@ -8,17 +10,19 @@ interface Props {
 }
 
 export default function StalenessDialog({ alerts, onConfirm, onCancel }: Props) {
+  const { t } = useTranslation()
   const priceChanges = alerts.filter((a) => a.old_price != null && a.new_price != null && a.old_price !== a.new_price)
   const linkIssues = alerts.filter((a) => a.link_inactive)
 
-  const fmt = (n: number) => `฿${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+  const locale = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
+  const fmt = (n: number) => `฿${n.toLocaleString(locale, { maximumFractionDigits: 0 })}`
 
   return (
     <div className="sd-overlay" onClick={onCancel}>
       <div className="sd-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="sd-header">
           <AlertTriangle size={16} className="sd-header-icon" />
-          <span className="sd-title">Some items have changed</span>
+          <span className="sd-title">{t('templates.staleness.title')}</span>
           <button className="sd-close" onClick={onCancel}>
             <X size={14} />
           </button>
@@ -26,11 +30,11 @@ export default function StalenessDialog({ alerts, onConfirm, onCancel }: Props) 
 
         <div className="sd-summary">
           {priceChanges.length > 0 && (
-            <span>{priceChanges.length} item{priceChanges.length !== 1 ? 's have' : ' has'} updated prices</span>
+            <span>{t('templates.staleness.priceChanges', { count: priceChanges.length })}</span>
           )}
           {priceChanges.length > 0 && linkIssues.length > 0 && <span>, </span>}
           {linkIssues.length > 0 && (
-            <span>{linkIssues.length} item{linkIssues.length !== 1 ? 's' : ''} may no longer be available</span>
+            <span>{t('templates.staleness.linkIssues', { count: linkIssues.length })}</span>
           )}
         </div>
 
@@ -54,7 +58,7 @@ export default function StalenessDialog({ alerts, onConfirm, onCancel }: Props) 
                 )}
                 {alert.link_inactive && (
                   <span className="sd-link-inactive">
-                    <LinkIcon size={10} /> Inactive link
+                    <LinkIcon size={10} /> {t('templates.staleness.inactiveLink')}
                   </span>
                 )}
               </div>
@@ -63,8 +67,8 @@ export default function StalenessDialog({ alerts, onConfirm, onCancel }: Props) 
         </div>
 
         <div className="sd-actions">
-          <button className="sd-cancel-btn" onClick={onCancel}>Cancel</button>
-          <button className="sd-confirm-btn" onClick={onConfirm}>Apply Anyway</button>
+          <button className="sd-cancel-btn" onClick={onCancel}>{t('common.cancel')}</button>
+          <button className="sd-confirm-btn" onClick={onConfirm}>{t('templates.staleness.applyAnyway')}</button>
         </div>
       </div>
 

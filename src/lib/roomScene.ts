@@ -57,6 +57,14 @@ export interface RoomShellOptions {
    *   Used by the live editor canvas.
    */
   mode?: 'full' | 'dollhouse'
+  /**
+   * Optional lookup that returns a fixture variant by id. When provided AND
+   * the variant has a completed `glb_path`, the shell loads the .glb and
+   * renders it inside the cutout instead of the generic door panel / window
+   * glass+frame fallback. Used by RoomCanvas so admins can curate styled
+   * door/window catalog and designers pick from it per fixture.
+   */
+  resolveVariant?: (variantId: string) => FurnitureVariant | undefined
 }
 
 export function buildRoomShell(
@@ -193,18 +201,45 @@ export function buildRoomShell(
       hole.closePath()
       wallShape.holes.push(hole)
 
-      const doorPanelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
-      const doorPanel = new THREE.Mesh(doorPanelGeo, doorMat)
       const doorLocalX = (x0 + x1) / 2 - wallLen / 2
       const doorLocalY = doorH / 2
       const cosA = Math.cos(-angle)
       const sinA = Math.sin(-angle)
       const midU = (a.u + b.u) / 2
       const midV = (a.v + b.v) / 2
-      doorPanel.position.set(midU + doorLocalX * cosA, doorLocalY, midV - doorLocalX * sinA)
-      doorPanel.rotation.y = -angle
-      doorPanel.castShadow = true
-      scene.add(doorPanel)
+      const doorX = midU + doorLocalX * cosA
+      const doorZ = midV - doorLocalX * sinA
+
+      const variant = door.variant_id && options.resolveVariant
+        ? options.resolveVariant(door.variant_id)
+        : undefined
+
+      if (variant?.glb_path && variant.render_status === 'completed') {
+        // Render the variant .glb inside the cutout
+        const slot = new THREE.Group()
+        slot.name = `door-slot:${door.id}`
+        slot.position.set(doorX, 0, doorZ)
+        slot.rotation.y = -angle
+        scene.add(slot)
+        void loadGlb(variant.glb_path).then((source) => {
+          fillWithGlb(slot, source, x1 - x0, 0.06, doorH, 1)
+        }).catch((err) => {
+          console.warn(`[roomScene] door .glb failed for ${door.id}:`, err)
+          const fallbackGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
+          const fallback = new THREE.Mesh(fallbackGeo, doorMat)
+          fallback.position.y = doorLocalY
+          fallback.castShadow = true
+          slot.add(fallback)
+        })
+      } else {
+        // Fallback: generic brown panel
+        const doorPanelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
+        const doorPanel = new THREE.Mesh(doorPanelGeo, doorMat)
+        doorPanel.position.set(doorX, doorLocalY, doorZ)
+        doorPanel.rotation.y = -angle
+        doorPanel.castShadow = true
+        scene.add(doorPanel)
+      }
     }
 
     for (const win of wallWindows) {
@@ -229,27 +264,57 @@ export function buildRoomShell(
       const midV = (a.v + b.v) / 2
       const glassLocalX = (x0 + x1) / 2 - wallLen / 2
       const glassLocalY = winSill + winH / 2
+      const winX = midU + glassLocalX * cosA
+      const winZ = midV - glassLocalX * sinA
 
-      const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
-      const glass = new THREE.Mesh(glassGeo, windowGlassMat)
-      glass.position.set(midU + glassLocalX * cosA, glassLocalY, midV - glassLocalX * sinA)
-      glass.rotation.y = -angle
-      scene.add(glass)
+      const winVariant = win.variant_id && options.resolveVariant
+        ? options.resolveVariant(win.variant_id)
+        : undefined
 
-      const frameThickness = 0.04
-      const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
-      const frame = new THREE.Mesh(frameGeo, windowFrameMat)
-      frame.position.copy(glass.position)
-      frame.position.y = glassLocalY
-      frame.rotation.y = -angle
+      if (winVariant?.glb_path && winVariant.render_status === 'completed') {
+        // Render the variant .glb inside the cutout at sill+height/2
+        const slot = new THREE.Group()
+        slot.name = `window-slot:${win.id}`
+        slot.position.set(winX, glassLocalY, winZ)
+        slot.rotation.y = -angle
+        scene.add(slot)
+        void loadGlb(winVariant.glb_path).then((source) => {
+          // fillWithGlb centers its content at y=size/2; windows want centered on
+          // the slot origin (glassLocalY). Use a sub-group so fill is centered.
+          const centered = new THREE.Group()
+          slot.add(centered)
+          fillWithGlb(centered, source, x1 - x0, 0.06, winH, 1)
+          centered.position.y = -winH / 2
+        }).catch((err) => {
+          console.warn(`[roomScene] window .glb failed for ${win.id}:`, err)
+          renderFallbackWindow()
+        })
+      } else {
+        renderFallbackWindow()
+      }
 
-      // Nudge frame slightly outward so it doesn't z-fight the glass
-      const len = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
-      const nu = -(b.v - a.v) / len
-      const nv = (b.u - a.u) / len
-      frame.position.x -= nu * 0.005
-      frame.position.z -= nv * 0.005
-      scene.add(frame)
+      function renderFallbackWindow() {
+        const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
+        const glass = new THREE.Mesh(glassGeo, windowGlassMat)
+        glass.position.set(winX, glassLocalY, winZ)
+        glass.rotation.y = -angle
+        scene.add(glass)
+
+        const frameThickness = 0.04
+        const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
+        const frame = new THREE.Mesh(frameGeo, windowFrameMat)
+        frame.position.copy(glass.position)
+        frame.position.y = glassLocalY
+        frame.rotation.y = -angle
+
+        // Nudge frame slightly outward so it doesn't z-fight the glass
+        const segLen = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
+        const nu = -(b.v - a.v) / segLen
+        const nv = (b.u - a.u) / segLen
+        frame.position.x -= nu * 0.005
+        frame.position.z -= nv * 0.005
+        scene.add(frame)
+      }
     }
 
     const wallGeo = new THREE.ShapeGeometry(wallShape)

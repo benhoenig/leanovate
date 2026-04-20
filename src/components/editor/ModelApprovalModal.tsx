@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { X, Check, XCircle, RefreshCw, Loader2 } from 'lucide-react'
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export default function ModelApprovalModal({ item, variant, onClose, onNext }: Props) {
+  const { t } = useTranslation()
   const { approveRender, rejectRender, retryRender } = useCatalogStore()
   const { showToast } = useUIStore()
 
@@ -146,7 +148,7 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         showToast(error, 'error')
         return
       }
-      showToast('3D model approved', 'success')
+      showToast(t('modelApproval.approvedToast'), 'success')
       onNext?.()
       onClose()
     } finally {
@@ -162,7 +164,7 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         showToast(error, 'error')
         return
       }
-      showToast('3D model rejected — re-upload images to retry', 'warning')
+      showToast(t('modelApproval.rejectedToast'), 'warning')
       onNext?.()
       onClose()
     } finally {
@@ -178,7 +180,7 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         showToast(error, 'error')
         return
       }
-      showToast('Regenerating 3D model…', 'success')
+      showToast(t('modelApproval.regeneratingToast'), 'success')
       onClose()
     } finally {
       setIsProcessing(false)
@@ -192,7 +194,7 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         <div className="approval-header">
           <div>
             <p className="approval-item-name">{item.name}</p>
-            <h2 className="approval-title">Review 3D model — "{variant.color_name}"</h2>
+            <h2 className="approval-title">{t('modelApproval.heading', { color: variant.color_name })}</h2>
           </div>
           <button className="approval-close-btn" onClick={onClose}>
             <X size={16} />
@@ -202,18 +204,18 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         {/* Preview canvas + source image */}
         <div className="approval-preview">
           <div className="approval-glb-wrap">
-            <span className="approval-label">Generated 3D model</span>
+            <span className="approval-label">{t('modelApproval.generatedLabel')}</span>
             <div className="approval-glb-frame">
               <canvas ref={canvasRef} className="approval-glb-canvas" width={400} height={400} />
               {loading && (
                 <div className="approval-loading">
                   <Loader2 size={22} className="spin" />
-                  <span>Loading model…</span>
+                  <span>{t('modelApproval.loadingModel')}</span>
                 </div>
               )}
               {loadError && !loading && (
                 <div className="approval-loading error">
-                  <span>Failed to load .glb</span>
+                  <span>{t('modelApproval.loadFailed')}</span>
                   <span className="error-detail">{loadError}</span>
                 </div>
               )}
@@ -222,15 +224,15 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
 
           {variant.original_image_urls.length > 0 && (
             <div className="approval-source-wrap">
-              <span className="approval-label">Source photo</span>
+              <span className="approval-label">{t('modelApproval.sourceLabel')}</span>
               <img
                 src={variant.original_image_urls[0]}
-                alt="Source"
+                alt={t('modelApproval.sourceAlt')}
                 className="approval-source-img"
               />
               {variant.original_image_urls.length > 1 && (
                 <span className="approval-source-count">
-                  +{variant.original_image_urls.length - 1} more
+                  {t('modelApproval.sourceMoreCount', { count: variant.original_image_urls.length - 1 })}
                 </span>
               )}
             </div>
@@ -238,22 +240,22 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         </div>
 
         <p className="approval-info">
-          If the 3D model looks right, approve it. If it's distorted or wrong, reject to re-upload better photos, or retry generation with the same images.
+          {t('modelApproval.info')}
         </p>
 
         {/* Actions */}
         <div className="approval-actions">
           <button className="approval-reject-btn" onClick={handleReject} disabled={isProcessing}>
             <XCircle size={15} />
-            Reject
+            {t('modelApproval.reject')}
           </button>
           <button className="approval-retry-btn" onClick={handleRetry} disabled={isProcessing}>
             <RefreshCw size={14} />
-            Retry
+            {t('modelApproval.retry')}
           </button>
           <button className="approval-approve-btn" onClick={handleApprove} disabled={isProcessing || !!loadError}>
             {isProcessing ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
-            Approve
+            {t('modelApproval.approve')}
           </button>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Boxes, ArrowLeft, Save, Eye, FileText, Undo2, Redo2 } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
@@ -9,14 +10,14 @@ import { useTemplateStore } from '@/stores/useTemplateStore'
 import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
 import RoomCanvas from '@/components/editor/RoomCanvas'
-import RotationControls from '@/components/editor/RotationControls'
-import ZoomControls from '@/components/editor/ZoomControls'
 import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
 import ConstructionDrawingModal from '@/components/editor/ConstructionDrawingModal'
+import LanguageToggle from '@/components/LanguageToggle'
 
 export default function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const { t } = useTranslation()
 
   const { currentProject, rooms, selectedRoomId, finishMaterials, isDirty, isLoading, loadProject, loadFinishMaterials, saveProject } = useProjectStore()
   const { showToast } = useUIStore()
@@ -62,9 +63,10 @@ export default function EditorPage() {
         }
       }
       if (staleCount > 0) {
-        showToast(`${staleCount} item${staleCount !== 1 ? 's have' : ' has'} price changes — check Cost tab`, 'warning')
+        showToast(t('editor.stalenessToast', { count: staleCount }), 'warning')
       }
     })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRoomId])
 
   // Warn on browser tab close
@@ -79,12 +81,12 @@ export default function EditorPage() {
   const handleSave = async () => {
     await saveProject()
     await useCanvasStore.getState().savePlacedFurniture()
-    showToast('Project saved', 'success')
+    showToast(t('editor.projectSaved'), 'success')
   }
 
   const handleBack = () => {
     if (isDirty) {
-      if (!window.confirm('You have unsaved changes. Leave without saving?')) return
+      if (!window.confirm(t('editor.confirmLeave'))) return
     }
     navigate('/')
   }
@@ -97,29 +99,30 @@ export default function EditorPage() {
       {/* Editor Top Bar */}
       <header className="editor-header">
         <div className="editor-header-left">
-          <button className="editor-back-btn" onClick={handleBack} title="Back to dashboard">
+          <button className="editor-back-btn" onClick={handleBack} title={t('editor.backToDashboard')}>
             <ArrowLeft size={16} />
           </button>
           <div className="header-logo-icon-small">
             <Boxes size={14} strokeWidth={1.8} />
           </div>
           <span className="editor-project-name">
-            {currentProject?.name ?? 'Loading…'}
+            {currentProject?.name ?? t('editor.loading')}
           </span>
-          {isDirty && <span className="unsaved-badge">Unsaved</span>}
+          {isDirty && <span className="unsaved-badge">{t('editor.unsaved')}</span>}
         </div>
         <div className="editor-header-right">
           {placementMode && (
-            <span className="placement-badge">Click on canvas to place — Esc to cancel</span>
+            <span className="placement-badge">{t('editor.placementBadge')}</span>
           )}
           {fixturePlacementType && (
-            <span className="placement-badge">Click on a wall to place {fixturePlacementType} — Esc to cancel</span>
+            <span className="placement-badge">{t('editor.fixturePlacementBadge', { type: fixturePlacementType })}</span>
           )}
+          <LanguageToggle />
           <button
             className="editor-undo-btn"
             onClick={() => useCanvasStore.getState().undo()}
             disabled={!canUndo}
-            title="Undo (Cmd+Z)"
+            title={`${t('editor.undo')} (Cmd+Z)`}
           >
             <Undo2 size={14} />
           </button>
@@ -127,7 +130,7 @@ export default function EditorPage() {
             className="editor-redo-btn"
             onClick={() => useCanvasStore.getState().redo()}
             disabled={!canRedo}
-            title="Redo (Cmd+Shift+Z)"
+            title={`${t('editor.redo')} (Cmd+Shift+Z)`}
           >
             <Redo2 size={14} />
           </button>
@@ -135,19 +138,19 @@ export default function EditorPage() {
             className="editor-drawings-btn"
             onClick={() => setShowDrawings(true)}
             disabled={!selectedRoom}
-            title="Export Construction Drawings"
+            title={t('editor.exportDrawings')}
           >
             <FileText size={14} />
-            Drawings
+            {t('editor.drawings')}
           </button>
           <button
             className="editor-preview-btn"
             onClick={() => setShowPreview(true)}
             disabled={!selectedRoom}
-            title="Preview Room"
+            title={t('editor.previewRoom')}
           >
             <Eye size={14} />
-            Preview
+            {t('editor.preview')}
           </button>
           <button
             className="editor-save-btn"
@@ -155,7 +158,7 @@ export default function EditorPage() {
             disabled={isLoading || !isDirty}
           >
             <Save size={14} />
-            {isLoading ? 'Saving…' : 'Save'}
+            {isLoading ? t('editor.saving') : t('editor.save')}
           </button>
         </div>
       </header>
@@ -172,14 +175,10 @@ export default function EditorPage() {
 
         <main className="editor-canvas" style={canvasCursor ? { cursor: canvasCursor } : undefined}>
           {selectedRoom ? (
-            <>
-              <RoomCanvas room={selectedRoom} finishMaterials={finishMaterials} />
-              <RotationControls />
-              <ZoomControls />
-            </>
+            <RoomCanvas room={selectedRoom} finishMaterials={finishMaterials} />
           ) : (
             <div className="canvas-empty">
-              <p className="canvas-empty-text">Select a room to view the canvas</p>
+              <p className="canvas-empty-text">{t('editor.selectRoomHint')}</p>
             </div>
           )}
         </main>

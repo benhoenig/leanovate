@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { UserPlus, Shield, User, Trash2, AlertCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -45,6 +46,8 @@ async function invokeEdgeFunction(name: string, body: Record<string, unknown>): 
 }
 
 export default function TeamManagement() {
+  const { t, i18n } = useTranslation()
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
   const currentProfile = useAuthStore((s) => s.profile)
   const [members, setMembers] = useState<Profile[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -85,7 +88,7 @@ export default function TeamManagement() {
     if (error) {
       setInviteResult({ error })
     } else {
-      setInviteResult({ tempPassword: (data?.temp_password as string) ?? 'Check email' })
+      setInviteResult({ tempPassword: (data?.temp_password as string) ?? t('admin.team.checkEmail') })
       setInviteEmail('')
       setInviteName('')
       await loadMembers()
@@ -120,7 +123,7 @@ export default function TeamManagement() {
   }
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>Loading team…</p>
+    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.team.loading')}</p>
   }
 
   return (
@@ -129,7 +132,7 @@ export default function TeamManagement() {
         <div className="team-error">
           <AlertCircle size={14} />
           {actionError}
-          <button onClick={() => setActionError(null)} className="team-error-dismiss">Dismiss</button>
+          <button onClick={() => setActionError(null)} className="team-error-dismiss">{t('admin.team.dismiss')}</button>
         </div>
       )}
 
@@ -138,21 +141,21 @@ export default function TeamManagement() {
         {!showInvite ? (
           <button className="team-invite-trigger" onClick={() => { setShowInvite(true); setInviteResult(null) }}>
             <UserPlus size={14} />
-            Invite Team Member
+            {t('admin.team.inviteMember')}
           </button>
         ) : (
           <div className="team-invite-form">
             <div className="invite-row">
               <input
                 type="email"
-                placeholder="Email"
+                placeholder={t('admin.team.emailLabel')}
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
                 className="invite-input"
               />
               <input
                 type="text"
-                placeholder="Display Name"
+                placeholder={t('admin.team.displayNamePlaceholder')}
                 value={inviteName}
                 onChange={(e) => setInviteName(e.target.value)}
                 className="invite-input"
@@ -162,8 +165,8 @@ export default function TeamManagement() {
                 onChange={(e) => setInviteRole(e.target.value as UserRole)}
                 className="invite-select"
               >
-                <option value="designer">Designer</option>
-                <option value="admin">Admin</option>
+                <option value="designer">{t('admin.team.roleDesigner')}</option>
+                <option value="admin">{t('admin.team.roleAdmin')}</option>
               </select>
             </div>
             <div className="invite-actions">
@@ -172,21 +175,21 @@ export default function TeamManagement() {
                 onClick={handleInvite}
                 disabled={isInviting || !inviteEmail.trim() || !inviteName.trim()}
               >
-                {isInviting ? 'Inviting…' : 'Send Invite'}
+                {isInviting ? t('admin.team.inviting') : t('admin.team.inviteButton')}
               </button>
               <button className="invite-cancel-btn" onClick={() => { setShowInvite(false); setInviteResult(null) }}>
-                Cancel
+                {t('admin.team.cancelInvite')}
               </button>
             </div>
             {inviteResult && (
               <div className={`invite-result ${inviteResult.error ? 'error' : 'success'}`}>
                 {inviteResult.error ? (
-                  <span>Error: {inviteResult.error}</span>
+                  <span>{t('admin.team.inviteErrorPrefix', { error: inviteResult.error })}</span>
                 ) : (
                   <span>
-                    User created. Temporary password: <strong>{inviteResult.tempPassword}</strong>
+                    {t('admin.team.inviteSuccessLine1')} <strong>{inviteResult.tempPassword}</strong>
                     <br />
-                    <em style={{ fontSize: 10, opacity: 0.8 }}>Share this password securely. User should change it on first login.</em>
+                    <em style={{ fontSize: 10, opacity: 0.8 }}>{t('admin.team.inviteSuccessLine2')}</em>
                   </span>
                 )}
               </div>
@@ -197,9 +200,10 @@ export default function TeamManagement() {
 
       {/* Members list */}
       <div className="team-list">
-        <p className="team-count">{members.length} team member{members.length !== 1 ? 's' : ''}</p>
+        <p className="team-count">{t('admin.team.countMembers', { count: members.length })}</p>
         {members.map((member) => {
           const isSelf = member.id === currentProfile?.id
+          const joinedDate = new Date(member.created_at).toLocaleDateString(localeTag, { month: 'short', day: 'numeric', year: 'numeric' })
           return (
             <div key={member.id} className={`team-member-row ${isSelf ? 'is-self' : ''}`}>
               <div className="member-icon-wrapper">
@@ -208,34 +212,34 @@ export default function TeamManagement() {
               <div className="member-info">
                 <span className="member-name">
                   {member.display_name}
-                  {isSelf && <span className="member-you">(you)</span>}
+                  {isSelf && <span className="member-you">{t('admin.team.youLabel')}</span>}
                 </span>
                 <span className="member-joined">
-                  Joined {new Date(member.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {t('admin.team.joined', { date: joinedDate })}
                 </span>
               </div>
               <span className={`member-role-badge ${member.role}`}>
-                {member.role}
+                {member.role === 'admin' ? t('admin.team.roleAdmin') : t('admin.team.roleDesigner')}
               </span>
               {!isSelf && (
                 <div className="member-actions">
                   <button
                     className="member-role-toggle"
                     onClick={() => handleChangeRole(member.id, member.role === 'admin' ? 'designer' : 'admin')}
-                    title={member.role === 'admin' ? 'Demote to Designer' : 'Promote to Admin'}
+                    title={member.role === 'admin' ? t('admin.team.demoteTooltip') : t('admin.team.promoteTooltip')}
                   >
-                    {member.role === 'admin' ? 'Demote' : 'Promote'}
+                    {member.role === 'admin' ? t('admin.team.demoteButton') : t('admin.team.promoteButton')}
                   </button>
                   {confirmRemoveId === member.id ? (
                     <div className="remove-confirm">
-                      <button className="remove-confirm-btn" onClick={() => handleRemove(member.id)}>Confirm</button>
-                      <button className="remove-cancel-btn" onClick={() => setConfirmRemoveId(null)}>Cancel</button>
+                      <button className="remove-confirm-btn" onClick={() => handleRemove(member.id)}>{t('admin.team.confirm')}</button>
+                      <button className="remove-cancel-btn" onClick={() => setConfirmRemoveId(null)}>{t('admin.team.cancel')}</button>
                     </div>
                   ) : (
                     <button
                       className="member-remove-btn"
                       onClick={() => setConfirmRemoveId(member.id)}
-                      title="Remove from team"
+                      title={t('admin.team.removeTooltip')}
                     >
                       <Trash2 size={13} />
                     </button>

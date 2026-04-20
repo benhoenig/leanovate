@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Boxes, ArrowLeft, ClipboardCheck, Package, Link2, Users, Cpu } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import PendingApprovalQueue from '@/components/admin/PendingApprovalQueue'
@@ -7,44 +8,47 @@ import CatalogOverview from '@/components/admin/CatalogOverview'
 import LinkHealthOverview from '@/components/admin/LinkHealthOverview'
 import TeamManagement from '@/components/admin/TeamManagement'
 import AIUsageOverview from '@/components/admin/AIUsageOverview'
+import LanguageToggle from '@/components/LanguageToggle'
 
 type AdminTab = 'pending' | 'catalog' | 'link-health' | 'team' | 'ai-usage'
 
-const TABS: { value: AdminTab; label: string; icon: React.ReactNode }[] = [
-  { value: 'pending', label: 'Pending', icon: <ClipboardCheck size={15} /> },
-  { value: 'catalog', label: 'Catalog', icon: <Package size={15} /> },
-  { value: 'link-health', label: 'Link Health', icon: <Link2 size={15} /> },
-  { value: 'team', label: 'Team', icon: <Users size={15} /> },
-  { value: 'ai-usage', label: 'AI Usage', icon: <Cpu size={15} /> },
-]
-
 export default function AdminPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { profile } = useAuthStore()
   const [activeTab, setActiveTab] = useState<AdminTab>('pending')
+
+  const tabs: { value: AdminTab; label: string; icon: React.ReactNode }[] = [
+    { value: 'pending', label: t('admin.tabPending'), icon: <ClipboardCheck size={15} /> },
+    { value: 'catalog', label: t('admin.tabCatalog'), icon: <Package size={15} /> },
+    { value: 'link-health', label: t('admin.tabLinkHealth'), icon: <Link2 size={15} /> },
+    { value: 'team', label: t('admin.tabTeam'), icon: <Users size={15} /> },
+    { value: 'ai-usage', label: t('admin.tabAIUsage'), icon: <Cpu size={15} /> },
+  ]
 
   return (
     <div className="admin-page">
       {/* Header */}
       <header className="admin-header">
         <div className="header-left">
-          <button className="header-back-btn" onClick={() => navigate('/')} title="Back to Dashboard">
+          <button className="header-back-btn" onClick={() => navigate('/')} title={t('admin.backToDashboard')}>
             <ArrowLeft size={16} />
           </button>
           <div className="header-logo-icon">
             <Boxes size={18} strokeWidth={1.8} />
           </div>
           <span className="header-logo-text">LEANOVATE</span>
-          <span className="header-admin-badge">ADMIN</span>
+          <span className="header-admin-badge">{t('admin.adminBadge')}</span>
         </div>
         <div className="header-right">
+          <LanguageToggle />
           <span className="header-user-name">{profile?.display_name}</span>
         </div>
       </header>
 
       {/* Tab navigation */}
       <div className="admin-tabs">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab.value}
             className={`admin-tab ${activeTab === tab.value ? 'active' : ''}`}

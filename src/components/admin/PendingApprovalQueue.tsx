@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, X, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -12,10 +13,12 @@ interface PendingItemWithDetails {
 }
 
 export default function PendingApprovalQueue() {
+  const { t, i18n } = useTranslation()
   const [pendingItems, setPendingItems] = useState<PendingItemWithDetails[]>([])
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const { approveItem, rejectItem } = useCatalogStore()
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
 
   const loadPending = async () => {
     setIsLoading(true)
@@ -68,8 +71,8 @@ export default function PendingApprovalQueue() {
       const result: PendingItemWithDetails[] = (items as FurnitureItem[]).map((item) => ({
         item,
         variants: variantsByItem.get(item.id) ?? [],
-        submitterName: profileMap.get(item.submitted_by) ?? 'Unknown',
-        categoryName: catMap.get(item.category_id) ?? 'Uncategorized',
+        submitterName: profileMap.get(item.submitted_by) ?? t('admin.pending.unknownSubmitter'),
+        categoryName: catMap.get(item.category_id) ?? t('admin.pending.uncategorized'),
       }))
 
       setPendingItems(result)
@@ -106,14 +109,14 @@ export default function PendingApprovalQueue() {
   }
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>Loading pending items…</p>
+    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.pending.loading')}</p>
   }
 
   if (pendingItems.length === 0) {
     return (
       <div className="pending-empty">
         <Check size={32} strokeWidth={1.5} />
-        <p>No items pending approval</p>
+        <p>{t('admin.pending.emptyDetailed')}</p>
         <style>{`
           .pending-empty {
             display: flex;
@@ -132,7 +135,7 @@ export default function PendingApprovalQueue() {
 
   return (
     <div className="pending-queue">
-      <p className="pending-count">{pendingItems.length} item{pendingItems.length !== 1 ? 's' : ''} pending review</p>
+      <p className="pending-count">{t('admin.pending.countPending', { count: pendingItems.length })}</p>
 
       {pendingItems.map(({ item, variants, submitterName, categoryName }) => {
         const isExpanded = expandedId === item.id
@@ -145,23 +148,23 @@ export default function PendingApprovalQueue() {
                 <span className="pending-category-pill">{categoryName}</span>
               </div>
               <div className="pending-card-meta">
-                <span className="pending-submitter">by {submitterName}</span>
+                <span className="pending-submitter">{t('admin.pending.submittedByShort', { name: submitterName })}</span>
                 <div className="pending-actions">
                   <button
                     className="pending-approve-btn"
                     onClick={(e) => { e.stopPropagation(); handleApprove(item.id) }}
-                    title="Approve"
+                    title={t('admin.pending.approve')}
                   >
                     <Check size={14} />
-                    Approve
+                    {t('admin.pending.approve')}
                   </button>
                   <button
                     className="pending-reject-btn"
                     onClick={(e) => { e.stopPropagation(); handleReject(item.id) }}
-                    title="Reject"
+                    title={t('admin.pending.reject')}
                   >
                     <X size={14} />
-                    Reject
+                    {t('admin.pending.reject')}
                   </button>
                 </div>
               </div>
@@ -184,7 +187,7 @@ export default function PendingApprovalQueue() {
 
                 {variants.length > 0 && (
                   <div className="pending-variants">
-                    <p className="pending-variants-label">{variants.length} variant{variants.length !== 1 ? 's' : ''}</p>
+                    <p className="pending-variants-label">{t('admin.pending.variantCount', { count: variants.length })}</p>
                     {variants.map((v) => (
                       <div key={v.id} className="pending-variant-row">
                         <img
@@ -193,9 +196,9 @@ export default function PendingApprovalQueue() {
                           className="pending-variant-thumb"
                         />
                         <span className="pending-variant-color">{v.color_name}</span>
-                        {v.price_thb != null && <span className="pending-variant-price">฿{v.price_thb.toLocaleString()}</span>}
+                        {v.price_thb != null && <span className="pending-variant-price">฿{v.price_thb.toLocaleString(localeTag)}</span>}
                         <span className="pending-variant-status" style={{ color: statusDot(v.render_approval_status) }}>
-                          3D: {v.render_approval_status}
+                          {t('admin.pending.threeDStatus', { status: t(`catalog.renderApproval.${v.render_approval_status}`, v.render_approval_status) })}
                         </span>
                       </div>
                     ))}

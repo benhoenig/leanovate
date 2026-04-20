@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { Boxes, Eye, EyeOff } from 'lucide-react'
+import LanguageToggle from '@/components/LanguageToggle'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { signIn, signUp, isLoading } = useAuthStore()
 
   const [isSignUp, setIsSignUp] = useState(false)
@@ -20,7 +23,7 @@ export default function LoginPage() {
 
     if (isSignUp) {
       if (!displayName.trim()) {
-        setError('Please enter your name')
+        setError(t('auth.errorNameRequired'))
         return
       }
       const result = await signUp(email, password, displayName)
@@ -41,54 +44,57 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
+      <div className="login-lang-toggle">
+        <LanguageToggle />
+      </div>
       <div className="login-card">
         {/* Logo */}
         <div className="login-logo">
           <div className="login-logo-icon">
             <Boxes size={28} strokeWidth={1.8} />
           </div>
-          <h1 className="login-title">LEANOVATE</h1>
-          <p className="login-subtitle">Isometric Room Planner</p>
+          <h1 className="login-title">{t('auth.appName')}</h1>
+          <p className="login-subtitle">{t('auth.tagline')}</p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="login-form">
           {isSignUp && (
             <div className="form-group">
-              <label htmlFor="displayName">Name</label>
+              <label htmlFor="displayName">{t('auth.nameLabel')}</label>
               <input
                 id="displayName"
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Enter your name"
+                placeholder={t('auth.namePlaceholder')}
                 autoComplete="name"
               />
             </div>
           )}
 
           <div className="form-group">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email">{t('auth.emailLabel')}</label>
             <input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
+              placeholder={t('auth.emailPlaceholder')}
               autoComplete="email"
               required
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">{t('auth.passwordLabel')}</label>
             <div className="password-input-wrapper">
               <input
                 id="password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder={t('auth.passwordPlaceholder')}
                 autoComplete={isSignUp ? 'new-password' : 'current-password'}
                 required
               />
@@ -110,14 +116,14 @@ export default function LoginPage() {
             className="login-submit"
             disabled={isLoading}
           >
-            {isLoading ? 'Loading...' : isSignUp ? 'Create Account' : 'Sign In'}
+            {isLoading ? t('auth.loadingButton') : isSignUp ? t('auth.signUpButton') : t('auth.signInButton')}
           </button>
         </form>
 
         {/* Toggle */}
         <div className="login-toggle">
           <span>
-            {isSignUp ? 'Already have an account?' : "Don't have an account?"}
+            {isSignUp ? t('auth.haveAccount') : t('auth.noAccount')}
           </span>
           <button
             type="button"
@@ -126,7 +132,7 @@ export default function LoginPage() {
               setError(null)
             }}
           >
-            {isSignUp ? 'Sign in' : 'Create one'}
+            {isSignUp ? t('auth.switchToSignIn') : t('auth.switchToSignUp')}
           </button>
         </div>
       </div>
@@ -139,6 +145,13 @@ export default function LoginPage() {
           justify-content: center;
           background: var(--color-canvas-bg);
           padding: 20px;
+          position: relative;
+        }
+
+        .login-lang-toggle {
+          position: absolute;
+          top: 20px;
+          right: 20px;
         }
 
         .login-card {

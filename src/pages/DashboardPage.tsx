@@ -1,23 +1,31 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Boxes, Plus, LogOut, FolderOpen, ExternalLink, Shield } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import NewProjectModal from '@/components/NewProjectModal'
+import LanguageToggle from '@/components/LanguageToggle'
 import type { Project } from '@/types'
 
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+  const { t, i18n } = useTranslation()
   const statusColors: Record<string, string> = {
     draft: 'var(--color-text-secondary)',
     completed: 'var(--color-success)',
   }
 
-  const formattedDate = new Date(project.created_at).toLocaleDateString('en-US', {
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
+  const formattedDate = new Date(project.created_at).toLocaleDateString(localeTag, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
   })
+
+  const statusLabel = project.status === 'completed'
+    ? t('dashboard.status.completed')
+    : t('dashboard.status.draft')
 
   return (
     <div className="project-card">
@@ -27,7 +35,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
             className="project-status-dot"
             style={{ background: statusColors[project.status] ?? 'var(--color-text-secondary)' }}
           />
-          <span className="project-status-label">{project.status}</span>
+          <span className="project-status-label">{statusLabel}</span>
         </div>
         <h3 className="project-name">{project.name}</h3>
         {project.description && <p className="project-description">{project.description}</p>}
@@ -36,7 +44,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
       <div className="project-card-footer">
         <button className="project-open-btn" onClick={onOpen}>
           <ExternalLink size={13} />
-          Open
+          {t('dashboard.open')}
         </button>
       </div>
     </div>
@@ -45,6 +53,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
 
 export default function DashboardPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { profile, signOut } = useAuthStore()
   const { projects, isLoading, loadProjects } = useProjectStore()
   const { activeModal, openModal } = useUIStore()
@@ -71,18 +80,19 @@ export default function DashboardPage() {
           <div className="header-logo-icon">
             <Boxes size={18} strokeWidth={1.8} />
           </div>
-          <span className="header-logo-text">LEANOVATE</span>
+          <span className="header-logo-text">{t('dashboard.appName')}</span>
         </div>
         <div className="header-right">
+          <LanguageToggle />
           {profile?.role === 'admin' && (
-            <button className="header-admin-btn" onClick={() => navigate('/admin')} title="Admin Dashboard">
+            <button className="header-admin-btn" onClick={() => navigate('/admin')} title={t('dashboard.adminButton')}>
               <Shield size={14} />
-              Admin
+              {t('dashboard.adminButton')}
             </button>
           )}
           <span className="header-user-name">{profile?.display_name}</span>
-          <span className="header-user-role">{profile?.role}</span>
-          <button className="header-sign-out" onClick={handleSignOut} title="Sign out">
+          <span className="header-user-role">{profile?.role === 'admin' ? t('common.admin') : t('common.designer')}</span>
+          <button className="header-sign-out" onClick={handleSignOut} title={t('common.signOut')}>
             <LogOut size={16} />
           </button>
         </div>
@@ -91,29 +101,29 @@ export default function DashboardPage() {
       {/* Content */}
       <main className="dashboard-content">
         <div className="dashboard-title-row">
-          <h1 className="dashboard-title">My Projects</h1>
+          <h1 className="dashboard-title">{t('dashboard.myProjects')}</h1>
           <button className="new-project-btn" onClick={handleNewProject}>
             <Plus size={16} />
-            New Project
+            {t('dashboard.newProject')}
           </button>
         </div>
 
         {isLoading ? (
           <div className="dashboard-loading">
-            <p className="loading-hint">Loading projects…</p>
+            <p className="loading-hint">{t('dashboard.loadingProjects')}</p>
           </div>
         ) : projects.length === 0 ? (
           <div className="dashboard-empty">
             <div className="empty-icon">
               <FolderOpen size={48} strokeWidth={1.2} />
             </div>
-            <h2 className="empty-title">No projects yet</h2>
+            <h2 className="empty-title">{t('dashboard.noProjectsTitle')}</h2>
             <p className="empty-description">
-              Create your first project to start designing a condo unit.
+              {t('dashboard.noProjectsSubtitle')}
             </p>
             <button className="empty-cta" onClick={handleNewProject}>
               <Plus size={16} />
-              Create First Project
+              {t('dashboard.createProject')}
             </button>
           </div>
         ) : (

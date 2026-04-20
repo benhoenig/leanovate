@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
 import { supabase, rawUpdate } from '@/lib/supabase'
 import type { FurnitureItem, FurnitureCategory, FurnitureVariant, ItemStatus } from '@/types'
@@ -34,13 +35,7 @@ async function invokeEdgeFunction(name: string, body: Record<string, unknown>): 
 
 type StatusFilter = 'all' | ItemStatus
 
-const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'draft', label: 'Draft' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
-]
+const STATUS_FILTER_VALUES: StatusFilter[] = ['all', 'draft', 'pending', 'approved', 'rejected']
 
 const STATUS_COLORS: Record<string, string> = {
   draft: 'var(--color-text-secondary)',
@@ -50,6 +45,17 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function CatalogOverview() {
+  const { t, i18n } = useTranslation()
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
+  const statusFilterLabel = (f: StatusFilter): string => {
+    switch (f) {
+      case 'all': return t('admin.catalogOverview.all')
+      case 'draft': return t('admin.catalogOverview.draft')
+      case 'pending': return t('admin.catalogOverview.pending')
+      case 'approved': return t('admin.catalogOverview.approved')
+      case 'rejected': return t('admin.catalogOverview.rejected')
+    }
+  }
   const [items, setItems] = useState<FurnitureItem[]>([])
   const [categories, setCategories] = useState<FurnitureCategory[]>([])
   const [variantsByItem, setVariantsByItem] = useState<Map<string, FurnitureVariant[]>>(new Map())
@@ -153,14 +159,14 @@ export default function CatalogOverview() {
       <div className="catalog-summary">
         <div className="summary-card summary-total">
           <span className="summary-value">{items.length}</span>
-          <span className="summary-label">Total Items</span>
+          <span className="summary-label">{t('admin.catalogOverview.totalItems')}</span>
         </div>
-        {STATUS_FILTERS.filter((f) => f.value !== 'all').map((f) => (
-          <div key={f.value} className="summary-card">
-            <span className="summary-value" style={{ color: STATUS_COLORS[f.value] }}>
-              {statusCounts[f.value] ?? 0}
+        {STATUS_FILTER_VALUES.filter((f) => f !== 'all').map((f) => (
+          <div key={f} className="summary-card">
+            <span className="summary-value" style={{ color: STATUS_COLORS[f] }}>
+              {statusCounts[f] ?? 0}
             </span>
-            <span className="summary-label">{f.label}</span>
+            <span className="summary-label">{statusFilterLabel(f)}</span>
           </div>
         ))}
       </div>
@@ -171,21 +177,21 @@ export default function CatalogOverview() {
           <Search size={14} />
           <input
             type="text"
-            placeholder="Search items…"
+            placeholder={t('admin.catalogOverview.searchPlaceholderLong')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="catalog-search-input"
           />
         </div>
         <div className="catalog-status-pills">
-          {STATUS_FILTERS.map((f) => (
+          {STATUS_FILTER_VALUES.map((f) => (
             <button
-              key={f.value}
-              className={`catalog-status-pill ${statusFilter === f.value ? 'active' : ''}`}
-              onClick={() => setStatusFilter(f.value)}
+              key={f}
+              className={`catalog-status-pill ${statusFilter === f ? 'active' : ''}`}
+              onClick={() => setStatusFilter(f)}
             >
-              {f.label}
-              {f.value !== 'all' && <span className="pill-count">{statusCounts[f.value] ?? 0}</span>}
+              {statusFilterLabel(f)}
+              {f !== 'all' && <span className="pill-count">{statusCounts[f] ?? 0}</span>}
             </button>
           ))}
         </div>
@@ -194,7 +200,7 @@ export default function CatalogOverview() {
             className={`catalog-category-pill ${categoryFilter === 'all' ? 'active' : ''}`}
             onClick={() => setCategoryFilter('all')}
           >
-            All Categories
+            {t('admin.catalogOverview.allCategories')}
           </button>
           {categories.map((cat) => (
             <button
@@ -210,11 +216,11 @@ export default function CatalogOverview() {
 
       {/* Items list */}
       {isLoading ? (
-        <p className="catalog-loading">Loading catalog…</p>
+        <p className="catalog-loading">{t('admin.catalogOverview.loading')}</p>
       ) : filteredItems.length === 0 ? (
         <div className="catalog-empty">
           <Package size={32} strokeWidth={1.5} />
-          <p>No items match the current filter</p>
+          <p>{t('admin.catalogOverview.noMatch')}</p>
         </div>
       ) : (
         <div className="catalog-items-list">
@@ -241,7 +247,7 @@ export default function CatalogOverview() {
                       <span className="catalog-item-dot" style={{ background: STATUS_COLORS[item.status] }} />
                       <span className="catalog-item-name">{item.name}</span>
                       <span className="catalog-item-status-badge" style={{ background: STATUS_COLORS[item.status] }}>
-                        {item.status}
+                        {t(`catalog.status.${item.status}`, item.status)}
                       </span>
                     </div>
                     <div className="catalog-item-bottom">
@@ -251,7 +257,7 @@ export default function CatalogOverview() {
                         <span className="catalog-item-dims">{item.width_cm}×{item.depth_cm}{item.height_cm ? `×${item.height_cm}` : ''} cm</span>
                       )}
                       <span className="catalog-item-date">
-                        {new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {new Date(item.created_at).toLocaleDateString(localeTag, { month: 'short', day: 'numeric' })}
                       </span>
                     </div>
                   </div>
@@ -284,7 +290,7 @@ export default function CatalogOverview() {
                     )}
 
                     {variants.length === 0 ? (
-                      <p className="catalog-detail-empty">No variants added yet</p>
+                      <p className="catalog-detail-empty">{t('admin.catalogOverview.noVariants')}</p>
                     ) : (
                       <div className="catalog-variants-grid">
                         {variants.map((v) => (
@@ -292,45 +298,45 @@ export default function CatalogOverview() {
                             <div className="catalog-variant-header">
                               <span className="catalog-variant-color">{v.color_name}</span>
                               {v.price_thb != null && (
-                                <span className="catalog-variant-price">฿{v.price_thb.toLocaleString()}</span>
+                                <span className="catalog-variant-price">฿{v.price_thb.toLocaleString(localeTag)}</span>
                               )}
                               <span className="catalog-variant-render-status" style={{ color: STATUS_COLORS[v.render_status === 'completed' ? 'approved' : v.render_status === 'failed' ? 'rejected' : 'pending'] }}>
-                                render: {v.render_status}
+                                {t('admin.catalogOverview.renderLabel', { status: t(`catalog.status.${v.render_status}`, v.render_status) })}
                               </span>
                               <span className="catalog-variant-render-status" style={{ color: STATUS_COLORS[v.render_approval_status === 'approved' ? 'approved' : v.render_approval_status === 'rejected' ? 'rejected' : 'pending'] }}>
-                                approval: {v.render_approval_status}
+                                {t('admin.catalogOverview.approvalLabel', { status: t(`catalog.renderApproval.${v.render_approval_status}`, v.render_approval_status) })}
                               </span>
                               <div className="catalog-variant-actions">
                                 <button
                                   className="catalog-regen-btn"
                                   disabled={regeneratingSprites.has(v.id)}
                                   onClick={(e) => { e.stopPropagation(); setConfirmAction({ variantId: v.id, type: 'sprites' }) }}
-                                  title="Regenerate 3D model"
+                                  title={t('admin.catalogOverview.regen3DTooltip')}
                                 >
                                   {regeneratingSprites.has(v.id) ? <RefreshCw size={12} className="spinning" /> : <Box size={12} />}
-                                  Regen 3D
+                                  {t('admin.catalogOverview.regen3D')}
                                 </button>
                               </div>
                             </div>
                             {confirmAction?.variantId === v.id && (
                               <div className="catalog-confirm-bar">
                                 <span className="catalog-confirm-msg">
-                                  Regenerate 3D model? This re-runs TRELLIS (~1 min) and resets approval to pending.
+                                  {t('admin.catalogOverview.regenConfirmMsg')}
                                 </span>
                                 <button
                                   className="catalog-confirm-yes"
                                   onClick={() => handleRegenerateSprites(v)}
                                 >
-                                  Confirm
+                                  {t('common.confirm')}
                                 </button>
-                                <button className="catalog-confirm-no" onClick={() => setConfirmAction(null)}>Cancel</button>
+                                <button className="catalog-confirm-no" onClick={() => setConfirmAction(null)}>{t('common.cancel')}</button>
                               </div>
                             )}
                             <div className="catalog-variant-images">
                               {v.original_image_urls.map((url, i) => (
                                 <div key={i} className="catalog-img-col">
-                                  <span className="catalog-img-label">Source {i + 1}</span>
-                                  <img src={url} alt={`Source ${i + 1}`} className="catalog-detail-img" />
+                                  <span className="catalog-img-label">{t('admin.catalogOverview.sourceLabel', { index: i + 1 })}</span>
+                                  <img src={url} alt={t('admin.catalogOverview.sourceLabel', { index: i + 1 })} className="catalog-detail-img" />
                                 </div>
                               ))}
                             </div>

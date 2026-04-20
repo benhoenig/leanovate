@@ -1,6 +1,7 @@
 import { create } from 'zustand'
+import i18n, { type Language, SUPPORTED_LANGUAGES } from '@/lib/i18n'
 
-export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'templates'
+export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'fixtures' | 'templates'
 type RightPanelTab = 'properties' | 'cost'
 export type CameraMode = 'design' | 'roam'
 
@@ -13,6 +14,11 @@ function readInitialGrid(): boolean {
   } catch {
     return false
   }
+}
+
+function readInitialLanguage(): Language {
+  const current = (i18n.resolvedLanguage || 'en') as Language
+  return (SUPPORTED_LANGUAGES as readonly string[]).includes(current) ? current : 'en'
 }
 
 interface UIState {
@@ -31,6 +37,10 @@ interface UIState {
   // Camera mode: design (orbit) vs roam (first-person walkthrough)
   cameraMode: CameraMode
   setCameraMode: (mode: CameraMode) => void
+
+  // Language (persisted to localStorage via i18next detector)
+  language: Language
+  setLanguage: (lang: Language) => void
 
   // Modals
   activeModal: string | null
@@ -59,6 +69,12 @@ export const useUIStore = create<UIState>((set) => ({
   // Session-local — no need to persist across tabs. Always starts in design.
   cameraMode: 'design',
   setCameraMode: (mode) => set({ cameraMode: mode }),
+
+  language: readInitialLanguage(),
+  setLanguage: (lang) => {
+    set({ language: lang })
+    i18n.changeLanguage(lang)
+  },
 
   activeModal: null,
   openModal: (id) => set({ activeModal: id }),

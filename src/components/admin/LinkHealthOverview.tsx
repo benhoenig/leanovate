@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link2, AlertTriangle, CheckCircle, HelpCircle, RefreshCw, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { FurnitureVariant } from '@/types'
@@ -42,6 +43,8 @@ async function invokeEdgeFunction(fnName: string, body: Record<string, unknown> 
 }
 
 export default function LinkHealthOverview() {
+  const { t, i18n } = useTranslation()
+  const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
   const [variants, setVariants] = useState<VariantWithItemName[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRechecking, setIsRechecking] = useState(false)
@@ -61,7 +64,7 @@ export default function LinkHealthOverview() {
       const itemData = row.furniture_items as { name: string } | null
       return {
         ...row,
-        item_name: itemData?.name ?? 'Unknown',
+        item_name: itemData?.name ?? t('common.unknown'),
       } as VariantWithItemName
     })
 
@@ -99,7 +102,7 @@ export default function LinkHealthOverview() {
   )
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>Loading link health…</p>
+    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.linkHealth.loading')}</p>
   }
 
   return (
@@ -109,22 +112,22 @@ export default function LinkHealthOverview() {
         <div className="link-card link-card-active">
           <CheckCircle size={18} />
           <span className="link-card-value">{activeCount}</span>
-          <span className="link-card-label">Active</span>
+          <span className="link-card-label">{t('admin.linkHealth.active')}</span>
         </div>
         <div className="link-card link-card-inactive">
           <AlertTriangle size={18} />
           <span className="link-card-value">{inactiveCount}</span>
-          <span className="link-card-label">Inactive</span>
+          <span className="link-card-label">{t('admin.linkHealth.inactive')}</span>
         </div>
         <div className="link-card link-card-unchecked">
           <HelpCircle size={18} />
           <span className="link-card-value">{uncheckedCount}</span>
-          <span className="link-card-label">Unchecked</span>
+          <span className="link-card-label">{t('admin.linkHealth.unchecked')}</span>
         </div>
         <div className="link-card link-card-price">
           <Link2 size={18} />
           <span className="link-card-value">{priceChangedCount}</span>
-          <span className="link-card-label">Price Changed</span>
+          <span className="link-card-label">{t('admin.linkHealth.priceChanged')}</span>
         </div>
       </div>
 
@@ -136,17 +139,17 @@ export default function LinkHealthOverview() {
           disabled={isRechecking}
         >
           {isRechecking ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-          {isRechecking ? 'Checking links…' : 'Run Recheck Now'}
+          {isRechecking ? t('admin.linkHealth.checking') : t('admin.linkHealth.runRecheck')}
         </button>
 
         {recheckResult && (
           <div className="recheck-result">
             <CheckCircle size={14} />
             <span>
-              Checked {recheckResult.checked} · Updated {recheckResult.updated}
-              {recheckResult.newly_inactive > 0 && ` · ${recheckResult.newly_inactive} newly inactive`}
-              {recheckResult.price_changes > 0 && ` · ${recheckResult.price_changes} price changes`}
-              {recheckResult.errors > 0 && ` · ${recheckResult.errors} errors`}
+              {t('admin.linkHealth.recheckSummary', { checked: recheckResult.checked, updated: recheckResult.updated })}
+              {recheckResult.newly_inactive > 0 && ` · ${t('admin.linkHealth.recheckNewlyInactive', { count: recheckResult.newly_inactive })}`}
+              {recheckResult.price_changes > 0 && ` · ${t('admin.linkHealth.recheckPriceChanges', { count: recheckResult.price_changes })}`}
+              {recheckResult.errors > 0 && ` · ${t('admin.linkHealth.recheckErrors', { count: recheckResult.errors })}`}
             </span>
           </div>
         )}
@@ -162,14 +165,14 @@ export default function LinkHealthOverview() {
       {/* Flagged items */}
       <div className="link-flagged-section">
         <h3 className="link-section-title">
-          Flagged Items
+          {t('admin.linkHealth.flaggedItems')}
           {flaggedVariants.length > 0 && <span className="flagged-count">{flaggedVariants.length}</span>}
         </h3>
 
         {flaggedVariants.length === 0 ? (
           <div className="link-empty">
             <CheckCircle size={24} strokeWidth={1.5} />
-            <p>No flagged items — all links healthy</p>
+            <p>{t('admin.linkHealth.noFlaggedHealthy')}</p>
           </div>
         ) : (
           <div className="flagged-list">
@@ -188,19 +191,19 @@ export default function LinkHealthOverview() {
                   {v.link_status === 'inactive' && (
                     <span className="flagged-badge flagged-badge-inactive">
                       <AlertTriangle size={10} />
-                      Inactive Link
+                      {t('admin.linkHealth.inactiveLink')}
                     </span>
                   )}
                   {v.price_changed && (
                     <span className="flagged-badge flagged-badge-price">
-                      Price Changed
+                      {t('admin.linkHealth.priceChangedBadge')}
                     </span>
                   )}
                 </div>
                 <span className="flagged-checked">
                   {v.last_checked_at
-                    ? new Date(v.last_checked_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                    : 'Never'}
+                    ? new Date(v.last_checked_at).toLocaleDateString(localeTag, { month: 'short', day: 'numeric' })
+                    : t('admin.linkHealth.never')}
                 </span>
               </div>
             ))}

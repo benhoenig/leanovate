@@ -8,6 +8,8 @@
  * Emits cm values so the parent can write to variant.width_cm / depth_cm.
  */
 
+import { useTranslation } from 'react-i18next'
+
 interface Props {
   /** Current width in cm. */
   widthCm: number
@@ -27,6 +29,7 @@ export default function BlockPicker({
   maxBlocks = 6,
   onChange,
 }: Props) {
+  const { t } = useTranslation()
   const currentW = Math.max(1, Math.round(widthCm / stepCm))
   const currentD = Math.max(1, Math.round(depthCm / stepCm))
   const gridSize = Math.max(maxBlocks, currentW, currentD)
@@ -56,7 +59,7 @@ export default function BlockPicker({
               type="button"
               className={`block-cell ${filled ? 'filled' : ''}`}
               onClick={() => handleCellClick(w, d)}
-              title={`${w * stepCm}cm × ${d * stepCm}cm`}
+              title={t('editor.canvas.blockDimensionTooltip', { w: w * stepCm, d: d * stepCm })}
             />
           )
         })}
@@ -69,7 +72,7 @@ export default function BlockPicker({
           </span>
         </span>
         <span className="block-picker-step">
-          {stepCm}cm grid
+          {t('editor.canvas.blockStepSuffix', { step: stepCm })}
         </span>
       </div>
 
