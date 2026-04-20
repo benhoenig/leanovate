@@ -13,14 +13,66 @@ Internal isometric room planner for an interior design team serving condo invest
 - @docs/designer-workflow.md — External photo preprocessing (Nano Banana) before upload (Phase 7+)
 
 ## Tech Stack
-- Frontend: React 18+ / TypeScript 5+ / Vite 5+ / PixiJS 8+ / Zustand 4+ / shadcn/ui / Tailwind 3+
+- Frontend: React 18+ / TypeScript 5+ / Vite 5+ / Three.js / Zustand 4+ / shadcn/ui / Tailwind 3+
 - Backend: Supabase (auth, PostgreSQL, storage, edge functions)
-- AI Pipeline: TRELLIS via Replicate (multi-image → .glb 3D model, does its own background removal) → Three.js (client-side .glb → isometric sprites). Flat items (rugs, etc.) bypass TRELLIS entirely.
+- AI Pipeline: TRELLIS via Replicate (multi-image → .glb 3D model, does its own background removal). .glb files are rendered directly in the Three.js canvas (no sprite generation). Flat items (rugs, etc.) bypass TRELLIS entirely and render as textured floor planes.
 - Hosting: Vercel (frontend) + Supabase Cloud (backend)
 - Icons: Lucide React (included with shadcn/ui)
 
 ## Current Phase
-V1 COMPLETE (Phases 1–6) + Phase 7 COMPLETE. Phase 8 (3D canvas rebuild, Sims-style) pending.
+V1 COMPLETE (Phases 1–6) + Phase 7 COMPLETE + Phase 8 COMPLETE. All MVP functionality shipped against the new 3D canvas.
+
+## Phase 8 Completion Notes
+Sims-style 3D canvas rebuild. PixiJS retired; Three.js is now the primary renderer for both the live editor canvas and the room perspective preview.
+
+### Schema changes (migration 20260420010000_phase8a_canvas_data_model.sql)
+- **Dropped:** `furniture_sprites` table (direct `.glb` rendering replaces 4-angle sprites)
+- **Dropped:** `direction` enum (no longer referenced by any column)
+- **placed_furniture coordinate rework:**
+  - `x → x_cm` (horizontal, room-local)
+  - `y → z_cm` (depth; Three.js Y is up)
+  - Added `y_cm float` (vertical offset — 0 for floor items, nonzero for wall-mounted art)
+  - `direction` enum → `rotation_deg float` (continuous rotation)
+- **New enum:** `block_size ('big' | 'small')`
+- **Added:** `furniture_categories.default_block_size` (seeded Small for Chair/Lamp/Side Table/Coffee Table; Big for the rest)
+- **Added:** `furniture_items.block_size_override` (nullable per-item override)
+- **Clean slate:** truncated `projects` (CASCADE wipes rooms + placed_furniture) + all 3 template tables. Retained categories, styles, profiles, finish_materials, furniture_items, furniture_variants, `.glb` files.
+
+### Block grid constants (`src/lib/blockGrid.ts`)
+- `BIG_BLOCK_CM = 50` — main furniture (sofa, bed, dining table, wardrobe, desk, TV stand, shelf, rug)
+- `SMALL_BLOCK_CM = 25` — accents (chair, lamp, side table, coffee table)
+- Single source of truth — tune by editing this file.
+
+### Canvas (`src/components/editor/RoomCanvas.tsx` — replaces `IsometricCanvas.tsx`)
+- Three.js scene with persistent layers (shell, furniture, handles, world grid)
+- **Design mode** (default): OrbitControls, mouse-drag rotates, wheel zooms, right-drag pans. Walls render BackSide (dollhouse) so the camera always sees in from outside.
+- **Roam mode**: PointerLockControls + WASD (Shift sprint), 160cm eye height, camera clamped inside room polygon. Walls render solid when in roam.
+- **Click-to-place** with ghost preview, grid snap (effective block size), Ctrl bypasses snap.
+- **Drag-to-move** selected furniture; **scroll-wheel rotate** 15°/1° (Ctrl); Delete/Backspace removes.
+- **Edit Shape** mode: teal sphere vertex handles + hollow ring midpoint handles + clickable wall push/pull. 10cm snap (Ctrl bypasses). Delete removes vertex (min 3).
+- **World grid toggle** (bottom-left) — 1m majors + 50cm minors, persists to localStorage.
+- **Camera presets** — RotationControls (NW/NE/SE/SW) move the orbit camera to room corners in design mode; hidden in roam.
+
+### Furniture rendering (`src/lib/roomScene.ts`)
+- `loadGlb(path)` — downloads + parses .glb, caches per path, brightens dark TRELLIS materials.
+- `createFurnitureGroup({ placed, variant, item, isFlat })` — returns a group positioned + rotated for the placed instance. Fills with cloned .glb (independent materials so ghost previews don't leak transparency), flat texture plane, or translucent placeholder box.
+- Group materials are always deep-cloned when building — no shared-material mutation bugs.
+
+### Construction drawings (`src/lib/renderConstructionDrawings.ts`)
+- Floor plan + elevations stay 2D (clean line-drawn aesthetic)
+- Now overlays furniture: rotated rectangles on the floor plan, silhouettes projected onto each elevation (depth-sorted back-to-front, flat items skipped)
+
+### Files deleted
+- `src/components/editor/IsometricCanvas.tsx` (1346 lines of PixiJS)
+- `src/lib/renderSprites.ts` (Three.js sprite renderer — sprites no longer used)
+- `pixi.js` removed from `package.json`
+
+### UI state (`src/stores/useUIStore.ts`)
+- `canvasGrid` — grid visibility, persisted to localStorage
+- `cameraMode` — 'design' | 'roam', session-local
+
+## Phase 7 Completion Notes
+Pipeline simplification — dropped rembg, added multi-image TRELLIS input, added flat-item bypass, moved approval gate from pre-TRELLIS (image review) to post-TRELLIS (.glb review).
 
 ## Phase 7 Completion Notes
 Pipeline simplification — dropped rembg, added multi-image TRELLIS input, added flat-item bypass, moved approval gate from pre-TRELLIS (image review) to post-TRELLIS (.glb review).

@@ -20,12 +20,12 @@
 | # | Integration | Runs On | Triggered By |
 |---|---|---|---|
 | 1 | Supabase Auth | Client (browser) | User login/logout |
-| 2 | Supabase Storage | Client + Edge Functions | Image uploads, sprite storage, .glb storage |
+| 2 | Supabase Storage | Client + Edge Functions | Image uploads, `.glb` storage |
 | 3 | Product Screenshot Extraction | Supabase Edge Function (Claude Vision) | Designer uploads a product page screenshot |
 | 4 | Replicate API — TRELLIS | Supabase Edge Function | Variant created (non-flat items). Multi-image input. |
-| 5 | Three.js Sprite Rendering | Client (browser) | After TRELLIS returns a .glb file |
-| 6 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
-| 7 | Room Perspective Preview | Client (browser, Three.js) | Designer clicks "Preview Room" |
+| 5 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
+| 6 | Room Perspective Preview | Client (browser, Three.js) | Designer clicks "Preview Room" |
+| 7 | 3D Canvas Rendering | Client (browser, Three.js) | Editor page mount (live canvas for placement) |
 
 ---
 
@@ -139,53 +139,7 @@
 
 ---
 
-## 5. Three.js Sprite Rendering (Client-Side)
-
-**Purpose:** Render 4 isometric sprite images from a .glb 3D model file.
-
-**Runs on:** Client-side (browser) — implemented in `src/lib/renderSprites.ts`
-
-**Triggered by:** `generate-3d-model` Edge Function returns successfully. The catalog store's `runRenderPipeline` calls `renderSprites()` after confirming `glb_path` is set. Not run for flat items.
-
-**Send:** variant ID + .glb file path from Supabase Storage
-**Process:**
-1. Download .glb from `glb-models` bucket
-2. Create offscreen 512×512 canvas (not attached to DOM)
-3. Set up Three.js: WebGLRenderer, Scene, OrthographicCamera (size 1.8), lighting
-4. Load .glb with GLTFLoader, center + normalize to 2-unit cube
-5. Render 4 views:
-
-| Direction | Azimuth | Elevation |
-|---|---|---|
-| `front_left` | 225° | 35.264° |
-| `front_right` | 315° | 35.264° |
-| `back_left` | 135° | 35.264° |
-| `back_right` | 45° | 35.264° |
-
-6. Export each as PNG blob via `canvas.toBlob()`
-7. Upload 4 PNGs to `sprites` bucket
-8. Upsert 4 `furniture_sprites` rows
-
-**Get back:** 4 PNG images (transparent background, 512×512px)
-
-**Where it goes:**
-- 4 images saved to `sprites` bucket in Supabase Storage
-- 4 rows upserted in `furniture_sprites` table (one per direction)
-- `furniture_variants.render_status` updated: `processing` → `completed`
-
-**Rendering specs:**
-- OrthographicCamera with true isometric projection (35.264° elevation)
-- Transparent background (alpha: true, clearColor 0x000000 at opacity 0)
-- 512×512px output size
-- Lighting: ambient 0.6 white + directional 1.2 warm (5,10,7) + fill 0.4 cool (-5,3,-5)
-
-**Why client-side:** Server-side rendering via Supabase Edge Functions (Deno) failed because headless canvas libraries (`npm:canvas`) require native binaries unavailable in Edge Functions. Browser WebGL rendering works reliably.
-
-**Error handling:** On render failure, set `render_status` to `failed`. Designer can retry (which re-runs from TRELLIS or just re-renders from existing .glb if it exists).
-
----
-
-## 6. Daily Link Recheck
+## 5. Daily Link Recheck
 
 **Purpose:** Verify that product source URLs are still active and prices haven't changed significantly.
 
@@ -214,7 +168,7 @@
 
 ---
 
-## 7. Room Perspective Preview
+## 6. Room Perspective Preview
 
 **Purpose:** Render eye-level interior vignettes — realistic 3D perspective images of the current room, showing all placed furniture, room geometry (walls with door/window cutouts), and finishes. User can select which wall to view from via wall selector buttons. Used for client presentations.
 
@@ -253,6 +207,37 @@
 **Error handling:** On failure (e.g. missing .glb files for some furniture), render what's available and show a warning banner: "X item(s) could not be rendered (missing 3D models)."
 
 **Post-MVP upgrade path:** Replace wall selector with free camera controls or add interactive 3D walkthrough (full Three.js scene in browser).
+
+---
+
+## 7. 3D Canvas Rendering (Live Editor)
+
+**Purpose:** The interactive room canvas designers work on. Renders the room shell + all placed furniture in real time, handles placement/drag/rotate/delete, edit-shape mode, and switches between design (orbit camera) and roam (first-person WASD) views.
+
+**Runs on:** Client-side (browser, Three.js) — implemented in `src/components/editor/RoomCanvas.tsx` with helpers in `src/lib/roomScene.ts`.
+
+**Triggered by:** `EditorPage` mount when a room is selected. Persists across sessions and re-renders reactively as state changes.
+
+**Scene layers:**
+- **Shell layer** — floor, walls, ceiling, lighting. Built once per room/finish change. Walls render `THREE.FrontSide` in design mode (dollhouse — near walls cull so camera sees in) and `THREE.DoubleSide` in roam mode. Ceiling hidden in design mode.
+- **Furniture layer** — placed items as cloned `.glb` groups. Cached per `glb_path` (single parse/download). Materials are deep-cloned on each instance so per-instance transparency tweaks (ghost preview) don't leak into shared state. Flat items render as textured floor planes; missing `.glb` falls back to a translucent teal box.
+- **Handle layer** — vertex sphere + midpoint ring handles when `shapeEditMode` is on.
+- **World grid** — 1m majors + 50cm minors, toggled via `useUIStore.canvasGrid` (persisted to localStorage).
+
+**Camera modes:**
+- **Design** (default) — `OrbitControls`, mouse-drag rotates, wheel zooms, right-drag pans. Pitch clamped [5%, 48%] of π so camera can't clip through floor/ceiling. NW/NE/SE/SW preset buttons reposition to room corners.
+- **Roam** — `PointerLockControls` + WASD, 160cm eye height, Shift sprints. Cursor locked; Esc exits. Camera is clamped inside room polygon to prevent walking through walls.
+
+**Interactions:**
+- Click-to-place: raycast against Y=0 plane, snap to effective block grid (50cm big / 25cm small, `src/lib/blockGrid.ts`). Ghost preview follows cursor.
+- Drag-to-move: same snap; Ctrl/Cmd bypasses snap; clamp to room polygon via `nearestPointOnPolygon`.
+- Rotate: scroll-wheel on selected item, 15° snap (1° with Ctrl). Debounced into a single undo command per gesture.
+- Edit shape: drag vertex sphere, click midpoint ring to insert, click wall to push/pull perpendicular. 10cm snap. Delete removes selected vertex (min 3).
+
+**Performance:**
+- Shell layer rebuilds only when room/finishes/camera-mode change — furniture stays loaded.
+- Furniture layer uses a signature (variant id + dims + flat flag + scale) to rebuild only on meaningful changes; position/rotation updates mutate in place.
+- `.glb` downloads cached in-memory per path.
 
 ---
 

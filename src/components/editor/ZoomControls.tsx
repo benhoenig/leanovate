@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/stores/useCanvasStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { ZoomIn, ZoomOut, Maximize } from 'lucide-react'
 
 export default function ZoomControls() {
@@ -6,6 +7,9 @@ export default function ZoomControls() {
   const zoomIn = useCanvasStore((s) => s.zoomIn)
   const zoomOut = useCanvasStore((s) => s.zoomOut)
   const fitToRoom = useCanvasStore((s) => s.fitToRoom)
+  const cameraMode = useUIStore((s) => s.cameraMode)
+
+  if (cameraMode === 'roam') return null
 
   return (
     <div className="zoom-controls">

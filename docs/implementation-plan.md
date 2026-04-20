@@ -1,8 +1,10 @@
 # Implementation Plan — LEANOVATE V2
 
-> **This is the active plan.** The previous plan (original 6 phases, now shipped) is archived at `implementation-plan-legacy.md` for reference only.
+> **STATUS: COMPLETE.** Phases 7 and 8 both shipped. This doc is retained for
+> historical context on the V2 direction; see `CLAUDE.md` for current state.
+> The original 6 phases are archived at `implementation-plan-legacy.md`.
 >
-> **Document scope:** Post-V1 direction and phases. Real-user testing of V1 surfaced two architectural improvements that are now locked in — this doc plans them.
+> **Document scope:** Post-V1 direction and phases. Real-user testing of V1 surfaced two architectural improvements — this doc records them.
 >
 > **Out of scope (covered in other docs):**
 >

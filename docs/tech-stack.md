@@ -42,17 +42,17 @@ LEANOVATE is an internal design tool for a team of 3–10 designers. The stack i
 - **Why:** Fastest development experience for React. Hot module replacement (changes appear instantly in browser during development). Modern default — no reason to use anything else for a new React project in 2025.
 - **Not using:** Create React App (deprecated), Next.js (server-side rendering adds complexity we don't need for an internal tool).
 
-### PixiJS
+### Three.js
 
-- **What:** GPU-accelerated 2D rendering engine for the isometric canvas
-- **Version:** PixiJS 8+
-- **Why:** Purpose-built for sprite-based 2D rendering. Handles hundreds of furniture sprites on screen with smooth performance. Supports:
-  - Sprite rendering (furniture images at isometric angles)
-  - Click and drag interactions (placing and repositioning furniture)
-  - Layer management (floor, walls, furniture, UI overlays)
-  - Camera rotation (4-corner room view rotation)
-- **Why not full 3D (Three.js for live rendering):** Full 3D adds massive complexity (lighting, camera controls, model loading) for marginal visual improvement in an isometric view. PixiJS achieves the visual quality needed for client presentations without the engineering overhead.
-- **Note:** Three.js is used client-side for both sprite rendering and room perspective previews (offscreen canvas, not visible in the UI). PixiJS handles all visible canvas rendering.
+- **What:** 3D rendering library — drives the live editor canvas + room perspective preview + construction drawings
+- **Version:** Three.js 0.183+
+- **Why:** Renders TRELLIS-generated `.glb` models directly in the scene. Designers place furniture in a 3D Sims-style room with orbit (design) and first-person WASD (roam) cameras. Uses `OrbitControls` + `PointerLockControls` from `three/examples/jsm/controls/`.
+- **Scene structure (`src/components/editor/RoomCanvas.tsx`):**
+  - Shell layer: floor (ShapeGeometry from polygon vertices), walls (PlaneGeometry or ShapeGeometry with door/window cutouts), ceiling. Walls render `BackSide` in design mode (dollhouse view) and `DoubleSide` in roam mode.
+  - Furniture layer: cloned `.glb` groups positioned at `(x_cm, y_cm, z_cm)` / 100 with `rotation_deg` applied as Y rotation. Flat items render as textured floor planes. Missing `.glb` falls back to a translucent placeholder box.
+  - Handle layer: vertex spheres + midpoint rings + wall push/pull, shown in Edit Shape mode.
+  - World grid: 1m majors + 50cm minors, toggle-on via bottom-left button.
+- **Historical note:** PixiJS was used in V1 for an isometric 2D sprite canvas. Phase 8 replaced it with Three.js — real-world testing showed that 4-angle sprite generation added pipeline fragility without enough visual payoff, and a real 3D camera is more flexible for client presentations.
 
 ### Zustand
 
@@ -288,7 +288,7 @@ src/
 |---|---|
 | **Next.js** | Server-side rendering adds complexity with no benefit for an internal tool. Vite + React is simpler and faster to develop. |
 | **Redux** | Too much boilerplate for a small team. Zustand achieves the same result with 80% less code. |
-| **Three.js (in live app for canvas)** | Full 3D rendering in the browser is overkill for the isometric canvas UI. PixiJS handles 2D sprites more efficiently. Three.js is used client-side for offscreen sprite rendering and room perspective previews (not visible in UI as live 3D). |
+| **PixiJS** | Used in V1 for 2D isometric sprites, replaced by Three.js in Phase 8. The sprite pipeline (TRELLIS → 4 angle PNGs → PixiJS) proved too fragile, and going fully 3D unlocked roam mode + arbitrary camera angles for client demos. |
 | **Zero123++ / TripoSR** | Multi-view image generators that produce flat 2D angle images. TRELLIS is 6x cheaper (1 API call vs 4), produces a reusable 3D model, and delivers higher quality for furniture. |
 | **Firebase** | Supabase provides the same features with PostgreSQL (relational) instead of Firestore (document). Relational data model is a better fit for interconnected design/catalog data. |
 | **AWS / GCP (direct)** | Managed services (Supabase, Vercel, Replicate) eliminate infrastructure management. Direct cloud provider only needed later for dedicated GPU servers at scale. |

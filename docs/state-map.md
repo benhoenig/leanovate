@@ -31,11 +31,11 @@ Owns everything about the currently open project: the unit itself, its rooms, ro
 
 ### 3. Canvas Store (`useCanvasStore`)
 
-Owns everything happening on the isometric canvas: which furniture is placed where, what's selected, placement mode, and room view rotation. Maps to the `placed_furniture` table in Supabase. This store only holds ID references to items and variants — it never duplicates product details like names, prices, or sprites. UI components join the data at render time by looking up IDs in the Catalog Store.
+Owns everything happening on the 3D canvas: placed furniture (position in cm, rotation in degrees), selection, placement mode, shape-edit mode, and design-mode camera preset rotation. Maps to the `placed_furniture` table in Supabase. This store only holds ID references to items and variants — it never duplicates product details like names or prices. UI components join the data at render time by looking up IDs in the Catalog Store.
 
 ### 4. Catalog Store (`useCatalogStore`)
 
-**Single source of truth for all product data.** Owns furniture items, color variants (with prices, images, sprites, and statuses), categories, and styles. Also owns search and filter state for the catalog browser. Maps to `furniture_items`, `furniture_variants`, `furniture_sprites`, `furniture_categories`, `styles`, and `furniture_item_styles` tables in Supabase. No other store should cache or duplicate any product data.
+**Single source of truth for all product data.** Owns furniture items, color variants (with prices, images, `.glb` paths, and statuses), categories, and styles. Also owns search and filter state for the catalog browser. Maps to `furniture_items`, `furniture_variants`, `furniture_categories`, `styles`, and `furniture_item_styles` tables in Supabase. No other store should cache or duplicate any product data.
 
 ### 5. Template Store (`useTemplateStore`)
 
@@ -43,7 +43,7 @@ Owns all three template layers: unit layout templates, furniture layout template
 
 ### 6. UI Store (`useUIStore`)
 
-Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, and toast notifications. No business logic, no data persistence. Resets on page refresh.
+Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, toast notifications, **world-grid visibility** (persisted to localStorage), and **camera mode** (`design` | `roam`, session-local). No business logic, no data persistence beyond the grid toggle.
 
 ---
 

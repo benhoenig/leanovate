@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'templates'
 type RightPanelTab = 'properties' | 'cost'
+export type CameraMode = 'design' | 'roam'
 
 const CANVAS_GRID_LS_KEY = 'leanovate.canvasGrid'
 
@@ -27,6 +28,10 @@ interface UIState {
   canvasGrid: boolean
   setCanvasGrid: (on: boolean) => void
 
+  // Camera mode: design (orbit) vs roam (first-person walkthrough)
+  cameraMode: CameraMode
+  setCameraMode: (mode: CameraMode) => void
+
   // Modals
   activeModal: string | null
   openModal: (id: string) => void
@@ -50,6 +55,10 @@ export const useUIStore = create<UIState>((set) => ({
     set({ canvasGrid: on })
     try { localStorage.setItem(CANVAS_GRID_LS_KEY, String(on)) } catch { /* ignore quota errors */ }
   },
+
+  // Session-local — no need to persist across tabs. Always starts in design.
+  cameraMode: 'design',
+  setCameraMode: (mode) => set({ cameraMode: mode }),
 
   activeModal: null,
   openModal: (id) => set({ activeModal: id }),

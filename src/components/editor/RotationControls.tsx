@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/stores/useCanvasStore'
+import { useUIStore } from '@/stores/useUIStore'
 import type { RoomRotation } from '@/lib/roomGeometry'
 
 const ROTATIONS: { dir: RoomRotation; label: string }[] = [
@@ -11,6 +12,10 @@ const ROTATIONS: { dir: RoomRotation; label: string }[] = [
 export default function RotationControls() {
   const roomRotation = useCanvasStore((s) => s.roomRotation)
   const setRoomRotation = useCanvasStore((s) => s.setRoomRotation)
+  const cameraMode = useUIStore((s) => s.cameraMode)
+
+  // Presets don't apply during roam — hide to avoid confusion.
+  if (cameraMode === 'roam') return null
 
   return (
     <div className="rotation-controls">

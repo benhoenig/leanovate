@@ -19,6 +19,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
 import {
   addStandardLighting,
   buildRoomShell,
@@ -59,7 +60,10 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const controlsRef = useRef<OrbitControls | null>(null)
+  const roamControlsRef = useRef<PointerLockControls | null>(null)
   const animationIdRef = useRef<number>(0)
+  /** Per-frame keyboard state for WASD roam movement. */
+  const roamKeysRef = useRef({ w: false, a: false, s: false, d: false, shift: false })
 
   // Scene refs we update mid-flight
   /** Shell group — rebuilt when geometry/finishes change. Parent for floor+walls+ceiling+lights. */
@@ -205,6 +209,11 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
     controlsRef.current = controls
 
+    // First-person controls for roam mode. Mouse look via pointer-lock.
+    // Disabled initially — activated only when useUIStore.cameraMode === 'roam'.
+    const roamControls = new PointerLockControls(camera, renderer.domElement)
+    roamControlsRef.current = roamControls
+
     // Create persistent scene with persistent layers.
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0xF5F3EF)
@@ -252,8 +261,51 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       if (gridGroupRef.current) gridGroupRef.current.visible = state.canvasGrid
     })
 
+    // Roam movement constants
+    const ROAM_BASE_SPEED = 2.5    // m/s
+    const ROAM_SHIFT_MULT = 2.0    // shift = fast
+    const EYE_HEIGHT = 1.6         // metres from floor
+    let lastFrameTime = performance.now()
+
     const animate = () => {
-      controls.update()
+      const now = performance.now()
+      const dt = Math.min(0.1, (now - lastFrameTime) / 1000) // clamp to 100ms to avoid jumps
+      lastFrameTime = now
+
+      const mode = useUIStore.getState().cameraMode
+      if (mode === 'design') {
+        controls.update()
+      } else if (mode === 'roam' && roamControls.isLocked) {
+        // WASD movement in camera-local horizontal plane
+        const k = roamKeysRef.current
+        const speed = ROAM_BASE_SPEED * (k.shift ? ROAM_SHIFT_MULT : 1)
+        let fwd = 0, right = 0
+        if (k.w) fwd += 1
+        if (k.s) fwd -= 1
+        if (k.d) right += 1
+        if (k.a) right -= 1
+        if (fwd !== 0 || right !== 0) {
+          const len = Math.sqrt(fwd * fwd + right * right)
+          fwd /= len; right /= len
+          const delta = speed * dt
+          roamControls.moveForward(fwd * delta)
+          roamControls.moveRight(right * delta)
+          // Keep eye at 160cm regardless of vertical look
+          camera.position.y = EYE_HEIGHT
+          // Clamp to room polygon so user can't walk through walls
+          const verts = getVertices(room)
+          if (!pointInPolygon(camera.position.x, camera.position.z, verts)) {
+            const np = nearestPointOnPolygon(camera.position.x, camera.position.z, verts)
+            // Nudge slightly inside to avoid getting stuck on wall edge
+            const toCentroid = polygonCentroid(verts)
+            const dirU = toCentroid.u - np.u, dirV = toCentroid.v - np.v
+            const dlen = Math.sqrt(dirU * dirU + dirV * dirV) || 1
+            camera.position.x = np.u + (dirU / dlen) * 0.02
+            camera.position.z = np.v + (dirV / dlen) * 0.02
+          }
+        }
+      }
+
       if (sceneRef.current && cameraRef.current && rendererRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current)
       }
@@ -297,19 +349,22 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
   }, [])
 
-  // ── Rebuild shell (floor / walls / ceiling / lights) on geometry/finish change ─
+  // ── Rebuild shell (floor / walls / ceiling / lights) ──────────────────────
+  // Depends on: room geometry, finishes, AND camera mode (dollhouse vs full).
+  const shellModeCameraMode = useUIStore((s) => s.cameraMode)
   useEffect(() => {
     const shellGroup = shellGroupRef.current
     if (!shellGroup || !cameraRef.current || !controlsRef.current) return
 
-    // Dispose old shell meshes (keeps furniture + handle layers intact)
     for (const child of [...shellGroup.children]) {
       shellGroup.remove(child)
       disposeSceneObjects(child as unknown as THREE.Scene)
     }
 
-    // Room shell + lights go inside shellGroup so they can be torn down together
-    const shell = buildRoomShell(shellGroup, room, finishMaterials, { mode: 'dollhouse' })
+    // Roam mode: walls + ceiling solid (you're inside the room, presenting).
+    // Design mode: dollhouse — camera is outside, walls facing camera cull.
+    const shellMode = shellModeCameraMode === 'roam' ? 'full' : 'dollhouse'
+    const shell = buildRoomShell(shellGroup, room, finishMaterials, { mode: shellMode })
     addStandardLighting(shellGroup, room)
     floorMeshRef.current = shell.floorMesh
 
@@ -337,7 +392,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       controlsRef.current.update()
       framedRoomIdRef.current = room.id
     }
-  }, [room, finishMaterials])
+  }, [room, finishMaterials, shellModeCameraMode])
 
   // ── Furniture rendering: sync placedFurniture ↔ scene graph ─────────────────
   useEffect(() => {
@@ -679,6 +734,98 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     return null
   }, [])
 
+  // ── NW/NE/SE/SW camera presets (RotationControls buttons) ──────────────────
+  // Moves the orbit camera to the chosen corner of the room. Ignored in roam.
+  useEffect(() => {
+    const apply = (rot: import('@/lib/roomGeometry').RoomRotation) => {
+      if (useUIStore.getState().cameraMode !== 'design') return
+      const orbit = controlsRef.current
+      const camera = cameraRef.current
+      if (!orbit || !camera) return
+
+      const verts = getVertices(room)
+      const centroid = polygonCentroid(verts)
+      const ceilingH = (room.ceiling_height_cm ?? 260) / 100
+      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity
+      for (const v of verts) {
+        if (v.u < minU) minU = v.u; if (v.u > maxU) maxU = v.u
+        if (v.v < minV) minV = v.v; if (v.v > maxV) maxV = v.v
+      }
+      const maxDim = Math.max(maxU - minU, maxV - minV, ceilingH)
+      const d = maxDim * 1.0
+
+      // CCW polygon convention: V increases going "south" (depth axis).
+      // NW = -U, -V. NE = +U, -V. SE = +U, +V. SW = -U, +V.
+      const offsets: Record<import('@/lib/roomGeometry').RoomRotation, { du: number; dv: number }> = {
+        front_left: { du: -1, dv: -1 },   // NW
+        front_right: { du: 1, dv: -1 },   // NE
+        back_right: { du: 1, dv: 1 },     // SE
+        back_left: { du: -1, dv: 1 },     // SW
+      }
+      const off = offsets[rot]
+      camera.position.set(
+        centroid.u + off.du * d,
+        ceilingH * 1.6,
+        centroid.v + off.dv * d,
+      )
+      orbit.target.set(centroid.u, ceilingH * 0.4, centroid.v)
+      orbit.update()
+    }
+
+    // Don't snap on mount — only react to user clicks.
+    const unsub = useCanvasStore.subscribe((state, prev) => {
+      if (state.roomRotation === prev.roomRotation) return
+      apply(state.roomRotation)
+    })
+    return unsub
+  }, [room])
+
+  // ── Camera mode switch (design ↔ roam) ─────────────────────────────────────
+  useEffect(() => {
+    const apply = () => {
+      const mode = useUIStore.getState().cameraMode
+      const orbit = controlsRef.current
+      const roam = roamControlsRef.current
+      const camera = cameraRef.current
+      if (!orbit || !roam || !camera) return
+
+      if (mode === 'roam') {
+        orbit.enabled = false
+        // Position camera at room centroid at eye height, looking toward
+        // whatever the orbit camera was pointed at.
+        const verts = getVertices(room)
+        const centroid = polygonCentroid(verts)
+        camera.position.set(centroid.u, 1.6, centroid.v)
+        // Preserve rough heading from orbit target
+        const target = orbit.target.clone()
+        target.y = 1.6
+        camera.lookAt(target)
+      } else {
+        // Exiting roam — unlock pointer if needed, re-enable orbit
+        if (roam.isLocked) roam.unlock()
+        orbit.enabled = true
+      }
+    }
+
+    apply()
+    const unsub = useUIStore.subscribe((state, prev) => {
+      if (state.cameraMode === prev.cameraMode) return
+      apply()
+    })
+    // When user manually unlocks (Esc via browser), fall back to design mode
+    const onUnlock = () => {
+      if (useUIStore.getState().cameraMode === 'roam') {
+        useUIStore.getState().setCameraMode('design')
+      }
+    }
+    roamControlsRef.current?.addEventListener('unlock', onUnlock)
+
+    return () => {
+      unsub()
+      roamControlsRef.current?.removeEventListener('unlock', onUnlock)
+    }
+  }, [room])
+
   /**
    * Raycast against shell-layer walls. Walls are tagged with
    * `userData.kind = 'wall'` + `userData.wallIndex` by `buildRoomShell`.
@@ -966,6 +1113,17 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
+      // Roam mode WASD capture (runs first; if in roam, skip design-mode hotkeys)
+      if (useUIStore.getState().cameraMode === 'roam') {
+        if (e.key === 'w' || e.key === 'W') roamKeysRef.current.w = true
+        else if (e.key === 's' || e.key === 'S') roamKeysRef.current.s = true
+        else if (e.key === 'a' || e.key === 'A') roamKeysRef.current.a = true
+        else if (e.key === 'd' || e.key === 'D') roamKeysRef.current.d = true
+        else if (e.key === 'Shift') roamKeysRef.current.shift = true
+        else if (e.key === 'Escape') useUIStore.getState().setCameraMode('design')
+        return
+      }
+
       const s = useCanvasStore.getState()
       if (e.key === 'Escape') {
         if (s.placementMode) s.cancelPlacement()
@@ -1126,12 +1284,21 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       useCanvasStore.getState().setSelectedVertex(null)
     }
 
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'w' || e.key === 'W') roamKeysRef.current.w = false
+      else if (e.key === 's' || e.key === 'S') roamKeysRef.current.s = false
+      else if (e.key === 'a' || e.key === 'A') roamKeysRef.current.a = false
+      else if (e.key === 'd' || e.key === 'D') roamKeysRef.current.d = false
+      else if (e.key === 'Shift') roamKeysRef.current.shift = false
+    }
+
     container.addEventListener('pointerdown', onPointerDown)
     container.addEventListener('pointermove', onPointerMove)
     container.addEventListener('pointerup', onPointerUp)
     container.addEventListener('pointercancel', onPointerUp)
     container.addEventListener('wheel', onWheel, { passive: false })
     window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
 
     return () => {
       container.removeEventListener('pointerdown', onPointerDown)
@@ -1140,6 +1307,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       container.removeEventListener('pointercancel', onPointerUp)
       container.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
       clearTimeout(wheelCommitTimer)
     }
   }, [room, raycastFloor, raycastFurniture, raycastHandle, raycastWall])
@@ -1148,11 +1316,19 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   const placementMode = useCanvasStore((s) => s.placementMode)
   const gridOn = useUIStore((s) => s.canvasGrid)
   const setCanvasGrid = useUIStore((s) => s.setCanvasGrid)
+  const cameraMode = useUIStore((s) => s.cameraMode)
+  const setCameraMode = useUIStore((s) => s.setCameraMode)
+
+  const enterRoam = () => {
+    setCameraMode('roam')
+    // Lock on the next frame so the click event has finished propagating
+    requestAnimationFrame(() => roamControlsRef.current?.lock())
+  }
 
   return (
     <div
       ref={containerRef}
-      className={`room-canvas ${placementMode ? 'placement-mode' : ''}`}
+      className={`room-canvas ${placementMode ? 'placement-mode' : ''} ${cameraMode === 'roam' ? 'roam-mode' : ''}`}
     >
       {/* Floating canvas controls */}
       <button
@@ -1166,6 +1342,23 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         </svg>
         Grid
       </button>
+
+      {/* Camera mode toggle */}
+      <button
+        type="button"
+        className={`canvas-toggle-btn mode-toggle-btn ${cameraMode === 'roam' ? 'active' : ''}`}
+        onClick={() => cameraMode === 'design' ? enterRoam() : setCameraMode('design')}
+        title={cameraMode === 'roam' ? 'Back to design view' : 'Walk through the room (first-person)'}
+      >
+        {cameraMode === 'roam' ? '🎨 Design' : '🚶 Roam'}
+      </button>
+
+      {/* Roam-mode hint — small banner shown while walking */}
+      {cameraMode === 'roam' && (
+        <div className="roam-hint">
+          <strong>WASD</strong> to move · <strong>Shift</strong> to sprint · <strong>Mouse</strong> to look · <strong>Esc</strong> to exit
+        </div>
+      )}
 
       <style>{`
         .room-canvas {
@@ -1212,6 +1405,32 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         .grid-toggle-btn {
           bottom: 16px;
           left: 16px;
+        }
+        .mode-toggle-btn {
+          top: 16px;
+          right: 16px;
+        }
+        .room-canvas.roam-mode {
+          cursor: none;
+        }
+        .roam-hint {
+          position: absolute;
+          top: 16px;
+          left: 50%;
+          transform: translateX(-50%);
+          padding: 8px 14px;
+          border-radius: 8px;
+          background: rgba(0, 0, 0, 0.7);
+          color: white;
+          font-size: 11px;
+          font-weight: 500;
+          z-index: 6;
+          letter-spacing: 0.2px;
+          pointer-events: none;
+        }
+        .roam-hint strong {
+          font-weight: 700;
+          color: #7FE5DE;
         }
       `}</style>
     </div>

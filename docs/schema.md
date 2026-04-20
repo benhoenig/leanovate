@@ -48,8 +48,8 @@ CREATE TYPE render_status AS ENUM ('waiting', 'processing', 'completed', 'failed
 -- Designer approval of the generated 3D model (post-TRELLIS gate)
 CREATE TYPE render_approval_status AS ENUM ('pending', 'approved', 'rejected');
 
--- Isometric viewing directions
-CREATE TYPE direction AS ENUM ('front_left', 'front_right', 'back_left', 'back_right');
+-- Furniture placement grid size (big = 50 cm, small = 25 cm — see src/lib/blockGrid.ts)
+CREATE TYPE block_size AS ENUM ('big', 'small');
 
 -- Link health status (daily recheck)
 CREATE TYPE link_status AS ENUM ('active', 'inactive', 'unchecked');
@@ -138,6 +138,7 @@ Top-level groupings for the furniture catalog.
 | icon | text | nullable | Icon identifier for UI display |
 | sort_order | integer | NOT NULL, default 0 | Display order in catalog browser |
 | is_flat | boolean | NOT NULL, default false | If true, items in this category skip TRELLIS entirely — the first uploaded image is used directly as the canvas asset. Seeded true for `Rug`. |
+| default_block_size | block_size | NOT NULL, default 'big' | Grid size for furniture placement snap. Seeded Small for Chair, Lamp, Side Table, Coffee Table; Big for everything else. See `src/lib/blockGrid.ts`. |
 
 #### styles
 
@@ -166,6 +167,7 @@ The parent product record. Holds shared details — no color-specific data. Each
 | description | text | nullable | Product description (scraped, designer can override) |
 | status | item_status | NOT NULL, default 'draft' | draft = personal only, pending = submitted for review, approved = in shared catalog, rejected = admin declined |
 | is_flat_override | boolean | nullable | Per-item override of `category.is_flat`. Null = inherit from category. Lets designers flag a thin/flat item (e.g. a thin headboard) that falls in a non-flat category. |
+| block_size_override | block_size | nullable | Per-item override of `category.default_block_size`. Null = inherit. |
 | submitted_by | uuid | FK → profiles.id, NOT NULL | Designer who added this item |
 | reviewed_by | uuid | FK → profiles.id, nullable | Admin who approved/rejected |
 | reviewed_at | timestamptz | nullable | When the review happened |
@@ -211,20 +213,12 @@ Color/material variants of a parent furniture item. Each variant has its own ima
 
 **Indexes:** `furniture_item_id`, `render_status`, `render_approval_status`, `link_status`
 
-#### furniture_sprites
+#### ~~furniture_sprites~~ (dropped Phase 8a)
 
-AI-rendered isometric images. 4 per variant (one per direction).
-
-| Column | Type | Constraints | Description |
-|---|---|---|---|
-| id | uuid | PK, default gen_random_uuid() | |
-| variant_id | uuid | FK → furniture_variants.id ON DELETE CASCADE, NOT NULL | Which color variant this sprite belongs to |
-| direction | direction | NOT NULL | front_left, front_right, back_left, back_right |
-| image_path | text | NOT NULL | Path in Supabase Storage |
-| created_at | timestamptz | NOT NULL, default now() | |
-| | | UNIQUE (variant_id, direction) | One sprite per direction per variant |
-
-**Indexes:** `variant_id`
+In V1 this table held 4 isometric sprite PNGs per variant (one per direction).
+Phase 8 rebuilt the canvas in Three.js and renders `.glb` files directly, so
+sprites are obsolete. The table was dropped in migration `20260420010000_phase8a_canvas_data_model.sql`.
+The `direction` enum it depended on was also dropped.
 
 ---
 
@@ -232,7 +226,7 @@ AI-rendered isometric images. 4 per variant (one per direction).
 
 #### placed_furniture
 
-Instances of furniture items placed on the isometric canvas within a room.
+Instances of furniture items placed in a room. Coordinates are room-local cm.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
@@ -240,11 +234,13 @@ Instances of furniture items placed on the isometric canvas within a room.
 | room_id | uuid | FK → rooms.id ON DELETE CASCADE, NOT NULL | Which room |
 | furniture_item_id | uuid | FK → furniture_items.id, NOT NULL | Which parent product |
 | selected_variant_id | uuid | FK → furniture_variants.id, NOT NULL | Which color variant is currently shown on canvas |
-| x | float | NOT NULL | Position on isometric canvas (horizontal) |
-| y | float | NOT NULL | Position on isometric canvas (vertical) |
-| direction | direction | NOT NULL, default 'front_left' | Current rotation |
+| x_cm | float | NOT NULL | Horizontal position in room-local cm (world X in Three.js scene) |
+| y_cm | float | NOT NULL, default 0 | Vertical offset in cm. 0 = floor; non-zero = wall-mounted (art, mirrors, wall shelves) |
+| z_cm | float | NOT NULL | Depth position in room-local cm (world Z in Three.js scene; Y is up) |
+| rotation_deg | float | NOT NULL, default 0 | Rotation around vertical axis in degrees (0–360). Replaces the V1 4-direction enum. |
 | price_at_placement | decimal | nullable | The variant's price when placed. Compared against live price to trigger staleness alerts |
-| sort_order | integer | NOT NULL, default 0 | Z-index / layer order on canvas |
+| scale_factor | float | NOT NULL, default 1 | Per-instance size multiplier applied on top of variant dimensions |
+| sort_order | integer | NOT NULL, default 0 | Not used by the 3D canvas (retained for backwards compat) |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `room_id`, `furniture_item_id`
@@ -346,9 +342,7 @@ profiles
   │
   ├──< furniture_items (submitted_by)
   │       │
-  │       ├──< furniture_variants
-  │       │       │
-  │       │       └──< furniture_sprites (4 per variant)
+  │       ├──< furniture_variants (.glb rendered directly in 3D canvas)
   │       │
   │       ├──< furniture_item_styles >── styles
   │       │
@@ -373,9 +367,9 @@ profiles
 3. Designer uploads 1+ cropped product photos per color variant (first image is primary) → `furniture_variants` rows created with `original_image_urls[]`
 4. **Branch based on flat bypass:**
    - If `category.is_flat` (or `items.is_flat_override` = true): skip TRELLIS. `render_status` set to `completed` and `render_approval_status` to `approved` immediately. First uploaded image serves as canvas asset.
-   - Otherwise: `render_status` → processing. TRELLIS runs with all uploaded images (multi-image mode) → `glb_path` set → Three.js renders 4 sprites → `furniture_sprites` rows created → `render_status` → completed. `render_approval_status` stays `pending`.
+   - Otherwise: `render_status` → processing. TRELLIS runs with all uploaded images (multi-image mode) → `glb_path` set → `render_status` → completed. `render_approval_status` stays `pending`.
 5. Designer reviews the generated .glb in the Model Approval Modal (spinning 3D preview) → sets `render_approval_status` to approved, rejected, or retries (re-runs TRELLIS from the same images).
-6. Designer can use the item on canvas at any point after step 3 — the first uploaded image acts as the placeholder until sprites are ready.
+6. Designer can use the item on canvas at any point after step 3 — a translucent placeholder box is shown until the .glb finishes loading.
 
 ### Daily link validity recheck
 1. Scheduled Edge Function picks a batch of `furniture_variants` ordered by `last_checked_at` (oldest first)
