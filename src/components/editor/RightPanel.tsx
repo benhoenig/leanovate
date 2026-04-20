@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Plus, Pencil, RotateCcw } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
+import { RotateCw, Trash2, ExternalLink, DoorOpen, PanelTop, Pencil, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -11,6 +13,7 @@ import BlockPicker from './BlockPicker'
 import { blockStepCm } from '@/lib/blockGrid'
 
 export default function RightPanel() {
+  const { t } = useTranslation()
   const { rooms, selectedRoomId, updateRoom } = useProjectStore()
   const room = rooms.find((r) => r.id === selectedRoomId) ?? null
 
@@ -23,8 +26,8 @@ export default function RightPanel() {
 
   const renderProperties = () => {
     if (selectedPlaced) return <FurnitureProperties placed={selectedPlaced} />
-    if (room) return <RoomProperties room={room} updateRoom={updateRoom} />
-    return <p className="empty-hint">Select a room to edit</p>
+    if (room) return <RoomProperties room={room} updateRoom={updateRoom} t={t} />
+    return <p className="empty-hint">{t('editor.properties.selectRoomHint')}</p>
   }
 
   return (
@@ -35,13 +38,13 @@ export default function RightPanel() {
           className={`rp-tab ${rightPanelTab === 'properties' ? 'active' : ''}`}
           onClick={() => setRightPanelTab('properties')}
         >
-          Properties
+          {t('editor.rightPanel.properties')}
         </button>
         <button
           className={`rp-tab ${rightPanelTab === 'cost' ? 'active' : ''}`}
           onClick={() => setRightPanelTab('cost')}
         >
-          Cost
+          {t('editor.rightPanel.cost')}
         </button>
       </div>
 
@@ -58,8 +61,10 @@ export default function RightPanel() {
 // ── Furniture Properties ──────────────────────────────────────────────────────
 
 function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number } }) {
-  const { rotateItem, scaleItem, commitScale, switchVariant, removeItem } = useCanvasStore()
+  const { t } = useTranslation()
+  const { rotateItem, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem } = useCanvasStore()
   const scaleBeforeRef = useRef(placed.scale_factor ?? 1)
+  const rotBeforeRef = useRef(placed.rotation_deg)
   const catalogState = useCatalogStore()
   const item = catalogState.items.find((i) => i.id === placed.furniture_item_id)
   const variants = catalogState.getVariantsForItem(placed.furniture_item_id)
@@ -88,8 +93,8 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
   return (
     <>
       <div className="panel-section">
-        <span className="section-title">FURNITURE</span>
-        <span className="fp-name">{item?.name ?? 'Unknown'}</span>
+        <span className="section-title">{t('editor.properties.furniture')}</span>
+        <span className="fp-name">{item?.name ?? t('editor.properties.unknown')}</span>
         {category && <span className="fp-category">{category.name}</span>}
       </div>
 
@@ -98,7 +103,7 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
       {/* Variant swatches */}
       {variants.length > 0 && (
         <div className="panel-section">
-          <span className="section-title">COLOR</span>
+          <span className="section-title">{t('editor.properties.color')}</span>
           <div className="fp-swatch-grid">
             {variants.map((v) => (
               <button
@@ -125,11 +130,11 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
 
       {/* Details */}
       <div className="panel-section">
-        <span className="section-title">DETAILS</span>
+        <span className="section-title">{t('editor.properties.details')}</span>
         {formattedPrice && <div className="fp-price">{formattedPrice}</div>}
         {dims && <div className="fp-dims">{dims} cm</div>}
         <div className="fp-scale-row">
-          <label className="fp-scale-label">Size</label>
+          <label className="fp-scale-label">{t('editor.properties.size')}</label>
           <input
             type="range"
             min={50}
@@ -157,10 +162,40 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
             <span className="fp-scale-pct">%</span>
           </div>
         </div>
-        <div className="fp-direction">Rotation: {Math.round(placed.rotation_deg)}°</div>
+        <div className="fp-scale-row">
+          <label className="fp-scale-label">{t('editor.properties.rotation')}</label>
+          <input
+            type="range"
+            min={0}
+            max={360}
+            step={1}
+            value={Math.round(placed.rotation_deg)}
+            onPointerDown={() => { rotBeforeRef.current = placed.rotation_deg }}
+            onChange={(e) => setItemRotation(placed.id, parseInt(e.target.value))}
+            onPointerUp={() => commitRotation(placed.id, rotBeforeRef.current)}
+            className="fp-scale-slider"
+          />
+          <div className="fp-scale-input-wrap">
+            <input
+              type="number"
+              min={0}
+              max={360}
+              step={1}
+              value={Math.round(placed.rotation_deg)}
+              onFocus={() => { rotBeforeRef.current = placed.rotation_deg }}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                if (!isNaN(v)) setItemRotation(placed.id, v)
+              }}
+              onBlur={() => commitRotation(placed.id, rotBeforeRef.current)}
+              className="fp-scale-input"
+            />
+            <span className="fp-scale-pct">°</span>
+          </div>
+        </div>
         {sourceUrl && sourceUrl !== 'manual' && (
           <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="fp-link">
-            <ExternalLink size={11} /> View product
+            <ExternalLink size={11} /> {t('editor.properties.viewProduct')}
           </a>
         )}
       </div>
@@ -182,10 +217,10 @@ function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_
       {/* Actions */}
       <div className="panel-section">
         <button className="fp-action-btn" onClick={() => rotateItem(placed.id)}>
-          <RotateCw size={13} /> Rotate
+          <RotateCw size={13} /> {t('editor.properties.rotateAction')}
         </button>
         <button className="fp-action-btn fp-action-btn--danger" onClick={() => removeItem(placed.id)}>
-          <Trash2 size={13} /> Remove
+          <Trash2 size={13} /> {t('editor.properties.removeAction')}
         </button>
       </div>
     </>
@@ -205,6 +240,7 @@ function PlacementSection({
   categoryDefaultBlock: import('@/types').BlockSize
   categoryIsFlat: boolean
 }) {
+  const { t } = useTranslation()
   const { updateItem, updateVariant } = useCatalogStore()
 
   const effectiveBlock = item.block_size_override ?? categoryDefaultBlock
@@ -230,78 +266,91 @@ function PlacementSection({
 
   return (
     <div className="panel-section">
-      <span className="section-title">PLACEMENT</span>
+      <span className="section-title">{t('editor.properties.placement')}</span>
 
       {/* Block size — category default + override */}
       <div className="pc-row">
-        <label className="pc-label">Block size</label>
+        <label className="pc-label">{t('editor.properties.blockSize')}</label>
         <div className="pc-segmented">
           <button
             type="button"
             className={`pc-seg ${item.block_size_override === null || item.block_size_override === undefined ? 'active' : ''}`}
             onClick={() => setBlockOverride(null)}
-            title={`Inherit from ${categoryDefaultBlock === 'small' ? 'Small' : 'Big'} category default`}
+            title={t('editor.properties.inheritFromCategory', { value: categoryDefaultBlock === 'small' ? t('editor.properties.small') : t('editor.properties.big') })}
           >
-            Auto
+            {t('editor.properties.auto')}
           </button>
           <button
             type="button"
             className={`pc-seg ${item.block_size_override === 'big' ? 'active' : ''}`}
             onClick={() => setBlockOverride('big')}
           >
-            Big
+            {t('editor.properties.big')}
           </button>
           <button
             type="button"
             className={`pc-seg ${item.block_size_override === 'small' ? 'active' : ''}`}
             onClick={() => setBlockOverride('small')}
           >
-            Small
+            {t('editor.properties.small')}
           </button>
         </div>
       </div>
-      <span className="pc-hint">
-        Using <b>{effectiveBlock}</b> ({stepCm}cm grid)
-        {item.block_size_override === null || item.block_size_override === undefined ? ' — category default' : ' — per-item override'}
-      </span>
+      <span
+        className="pc-hint"
+        dangerouslySetInnerHTML={{
+          __html: t('editor.properties.usingBlockHint', {
+            block: effectiveBlock === 'small' ? t('editor.properties.small') : t('editor.properties.big'),
+            step: stepCm,
+            suffix: item.block_size_override === null || item.block_size_override === undefined
+              ? t('editor.properties.usingBlockSuffixDefault')
+              : t('editor.properties.usingBlockSuffixOverride'),
+          }),
+        }}
+      />
 
       {/* Flat-item toggle */}
       <div className="pc-row">
-        <label className="pc-label">Flat item</label>
+        <label className="pc-label">{t('editor.properties.flatItem')}</label>
         <div className="pc-segmented">
           <button
             type="button"
             className={`pc-seg ${item.is_flat_override === null || item.is_flat_override === undefined ? 'active' : ''}`}
             onClick={() => setFlatOverride(null)}
-            title={`Inherit from category (${categoryIsFlat ? 'flat' : 'standard'})`}
+            title={t('editor.properties.inheritFromCategoryFlat', { value: categoryIsFlat ? t('editor.properties.flat') : t('editor.properties.standard') })}
           >
-            Auto
+            {t('editor.properties.auto')}
           </button>
           <button
             type="button"
             className={`pc-seg ${item.is_flat_override === false ? 'active' : ''}`}
             onClick={() => setFlatOverride(false)}
           >
-            Standard
+            {t('editor.properties.standard')}
           </button>
           <button
             type="button"
             className={`pc-seg ${item.is_flat_override === true ? 'active' : ''}`}
             onClick={() => setFlatOverride(true)}
           >
-            Flat
+            {t('editor.properties.flat')}
           </button>
         </div>
       </div>
-      <span className="pc-hint">
-        Using <b>{effectiveIsFlat ? 'flat' : 'standard'}</b>
-        {effectiveIsFlat ? ' — skips TRELLIS, renders as floor plane' : ' — uses .glb model'}
-      </span>
+      <span
+        className="pc-hint"
+        dangerouslySetInnerHTML={{
+          __html: t('editor.properties.usingFlatHint', {
+            value: effectiveIsFlat ? t('editor.properties.flat') : t('editor.properties.standard'),
+            suffix: effectiveIsFlat ? t('editor.properties.usingFlatSuffixFlat') : t('editor.properties.usingFlatSuffixStandard'),
+          }),
+        }}
+      />
 
       {/* Dimensions */}
       <div className="pc-dims-row">
         <div className="pc-dims-col">
-          <span className="pc-dims-label">Footprint (W × D)</span>
+          <span className="pc-dims-label">{t('editor.properties.footprint')}</span>
           <BlockPicker
             widthCm={widthCm}
             depthCm={depthCm}
@@ -310,9 +359,9 @@ function PlacementSection({
           />
         </div>
         <div className="pc-dims-col pc-dims-col--narrow">
-          <span className="pc-dims-label">Fine-tune</span>
+          <span className="pc-dims-label">{t('editor.properties.fineTune')}</span>
           <div className="pc-cm-row">
-            <label className="pc-cm-label">W</label>
+            <label className="pc-cm-label">{t('editor.properties.widthShort')}</label>
             <input
               type="number"
               className="pc-cm-input"
@@ -322,7 +371,7 @@ function PlacementSection({
             />
           </div>
           <div className="pc-cm-row">
-            <label className="pc-cm-label">D</label>
+            <label className="pc-cm-label">{t('editor.properties.depthShort')}</label>
             <input
               type="number"
               className="pc-cm-input"
@@ -332,7 +381,7 @@ function PlacementSection({
             />
           </div>
           <div className="pc-cm-row">
-            <label className="pc-cm-label">H</label>
+            <label className="pc-cm-label">{t('editor.properties.heightShort')}</label>
             <input
               type="number"
               className="pc-cm-input"
@@ -449,14 +498,13 @@ function PlacementSection({
 
 // ── Room Properties (extracted from old RightPanel) ───────────────────────────
 
-function RoomProperties({ room, updateRoom }: {
+function RoomProperties({ room, updateRoom, t }: {
   room: { id: string; name: string; width_cm: number; height_cm: number; ceiling_height_cm: number; geometry: RoomGeometry }
   updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
+  t: TFunction
 }) {
   const { setFixturePlacementMode, fixturePlacementType, selectedFixtureId, setSelectedFixture, shapeEditMode, setShapeEditMode } = useCanvasStore()
   const [name, setName] = useState('')
-  const [widthCm, setWidthCm] = useState('')
-  const [heightCm, setHeightCm] = useState('')
   const [ceilingCm, setCeilingCm] = useState('')
 
   const geo = room.geometry as RoomGeometry
@@ -475,24 +523,12 @@ function RoomProperties({ room, updateRoom }: {
 
   useEffect(() => {
     setName(room.name)
-    setWidthCm(String(room.width_cm))
-    setHeightCm(String(room.height_cm))
     setCeilingCm(String(room.ceiling_height_cm))
-  }, [room.id, room.name, room.width_cm, room.height_cm, room.ceiling_height_cm])
+  }, [room.id, room.name, room.ceiling_height_cm])
 
   const commitName = () => {
     if (!name.trim() || name.trim() === room.name) return
     updateRoom(room.id, { name: name.trim() })
-  }
-  const commitWidth = () => {
-    const val = Math.min(2000, Math.max(50, parseInt(widthCm, 10)))
-    if (!isNaN(val) && val !== room.width_cm) updateRoom(room.id, { width_cm: val })
-    else setWidthCm(String(room.width_cm))
-  }
-  const commitHeight = () => {
-    const val = Math.min(2000, Math.max(50, parseInt(heightCm, 10)))
-    if (!isNaN(val) && val !== room.height_cm) updateRoom(room.id, { height_cm: val })
-    else setHeightCm(String(room.height_cm))
   }
   const commitCeiling = () => {
     const val = Math.min(400, Math.max(220, parseInt(ceilingCm, 10)))
@@ -504,30 +540,14 @@ function RoomProperties({ room, updateRoom }: {
   return (
     <>
       <div className="panel-section">
-        <span className="section-title">ROOM</span>
-        <input className="panel-input panel-input--name" value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={blurOnEnter} placeholder="Room name" />
+        <span className="section-title">{t('editor.properties.roomTitle')}</span>
+        <input className="panel-input panel-input--name" value={name} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={blurOnEnter} placeholder={t('editor.properties.roomNamePlaceholder')} />
       </div>
       <div className="panel-divider" />
       <div className="panel-section">
-        <span className="section-title">DIMENSIONS</span>
-        <div className="dims-grid">
-          <div className="dim-field">
-            <label className="dim-label">Width (cm){hasCustomVertices ? ' (auto)' : ''}</label>
-            <input className="panel-input" type="number" min="50" max="2000" value={widthCm}
-              onChange={(e) => setWidthCm(e.target.value)} onBlur={commitWidth} onKeyDown={blurOnEnter}
-              readOnly={hasCustomVertices} style={hasCustomVertices ? { opacity: 0.6 } : undefined}
-            />
-          </div>
-          <div className="dim-field">
-            <label className="dim-label">Depth (cm){hasCustomVertices ? ' (auto)' : ''}</label>
-            <input className="panel-input" type="number" min="50" max="2000" value={heightCm}
-              onChange={(e) => setHeightCm(e.target.value)} onBlur={commitHeight} onKeyDown={blurOnEnter}
-              readOnly={hasCustomVertices} style={hasCustomVertices ? { opacity: 0.6 } : undefined}
-            />
-          </div>
-        </div>
+        <span className="section-title">{t('editor.properties.dimensionsTitle')}</span>
         <div className="dim-field">
-          <label className="dim-label">Ceiling Height (cm)</label>
+          <label className="dim-label">{t('editor.properties.ceilingHeightLabel')}</label>
           <input className="panel-input" type="number" min="220" max="400" value={ceilingCm} onChange={(e) => setCeilingCm(e.target.value)} onBlur={commitCeiling} onKeyDown={blurOnEnter} />
         </div>
 
@@ -536,8 +556,8 @@ function RoomProperties({ room, updateRoom }: {
           onClick={() => setShapeEditMode(!shapeEditMode)}
         >
           <Pencil size={12} />
-          {shapeEditMode ? 'Done Editing' : 'Edit Shape'}
-          {shapeEditMode && <span className="vertex-count">{vertexCount} vertices</span>}
+          {shapeEditMode ? t('editor.properties.doneEditing') : t('editor.properties.editShape')}
+          {shapeEditMode && <span className="vertex-count">{t('editor.properties.verticesLabel', { count: vertexCount })}</span>}
         </button>
 
         {shapeEditMode && hasCustomVertices && (
@@ -552,54 +572,50 @@ function RoomProperties({ room, updateRoom }: {
               setShapeEditMode(false)
             }}
           >
-            <RotateCcw size={12} /> Reset to Rectangle
+            <RotateCcw size={12} /> {t('editor.properties.resetToRectangle')}
           </button>
         )}
       </div>
 
-      <div className="panel-divider" />
+      {((geo.doors?.length ?? 0) > 0 || (geo.windows?.length ?? 0) > 0 || fixturePlacementType) && (
+        <>
+          <div className="panel-divider" />
+          <div className="panel-section">
+            <span className="section-title">{t('editor.properties.fixtures')}</span>
 
-      {/* Fixtures */}
-      <div className="panel-section">
-        <span className="section-title">FIXTURES</span>
+            {(geo.doors ?? []).map((door, i) => (
+              <div key={door.id} className={`fixture-row ${selectedFixtureId === door.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(door.id)}>
+                <DoorOpen size={13} />
+                <span className="fixture-label">{t('editor.properties.door', { index: i + 1 })}</span>
+                <span className="fixture-meta">{t('editor.properties.wallLabel', { index: migrateFixtureWallIndex(door) + 1 })}</span>
+                <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(door.id) }} title={t('editor.properties.removeDoor')}>
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
 
-        {(geo.doors ?? []).map((door, i) => (
-          <div key={door.id} className={`fixture-row ${selectedFixtureId === door.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(door.id)}>
-            <DoorOpen size={13} />
-            <span className="fixture-label">Door {i + 1}</span>
-            <span className="fixture-meta">Wall {migrateFixtureWallIndex(door) + 1}</span>
-            <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(door.id) }} title="Remove door">
-              <Trash2 size={11} />
-            </button>
+            {(geo.windows ?? []).map((win, i) => (
+              <div key={win.id} className={`fixture-row ${selectedFixtureId === win.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(win.id)}>
+                <PanelTop size={13} />
+                <span className="fixture-label">{t('editor.properties.window', { index: i + 1 })}</span>
+                <span className="fixture-meta">{t('editor.properties.wallLabel', { index: migrateFixtureWallIndex(win) + 1 })}</span>
+                <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(win.id) }} title={t('editor.properties.removeWindow')}>
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+
+            {fixturePlacementType && (
+              <button
+                className="shape-reset-btn"
+                onClick={() => setFixturePlacementMode(null)}
+              >
+                {t('editor.properties.cancelPlacement')}
+              </button>
+            )}
           </div>
-        ))}
-
-        {(geo.windows ?? []).map((win, i) => (
-          <div key={win.id} className={`fixture-row ${selectedFixtureId === win.id ? 'selected' : ''}`} onClick={() => setSelectedFixture(win.id)}>
-            <PanelTop size={13} />
-            <span className="fixture-label">Window {i + 1}</span>
-            <span className="fixture-meta">Wall {migrateFixtureWallIndex(win) + 1}</span>
-            <button className="fixture-delete" onClick={(e) => { e.stopPropagation(); handleDeleteFixture(win.id) }} title="Remove window">
-              <Trash2 size={11} />
-            </button>
-          </div>
-        ))}
-
-        <div className="fixture-add-row">
-          <button
-            className={`fixture-add-btn ${fixturePlacementType === 'door' ? 'active' : ''}`}
-            onClick={() => setFixturePlacementMode(fixturePlacementType === 'door' ? null : 'door')}
-          >
-            <Plus size={12} /> Door
-          </button>
-          <button
-            className={`fixture-add-btn ${fixturePlacementType === 'window' ? 'active' : ''}`}
-            onClick={() => setFixturePlacementMode(fixturePlacementType === 'window' ? null : 'window')}
-          >
-            <Plus size={12} /> Window
-          </button>
-        </div>
-      </div>
+        </>
+      )}
 
       {selectedFixtureId && (
         <FixtureProperties
@@ -624,6 +640,7 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
   updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
   roomId: string
 }) {
+  const { t } = useTranslation()
   const door = (geo.doors ?? []).find(d => d.id === fixtureId) as RoomDoor | undefined
   const win = (geo.windows ?? []).find(w => w.id === fixtureId) as RoomWindow | undefined
   const fixture = door ?? win
@@ -693,18 +710,24 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
   return (
     <>
       <div className="panel-divider" />
+      <FixtureStyleSwatches
+        fixture={fixture}
+        isDoor={isDoor}
+        roomId={roomId}
+      />
+      <div className="panel-divider" />
       <div className="panel-section">
-        <span className="section-title">{isDoor ? 'DOOR' : 'WINDOW'} SIZE</span>
+        <span className="section-title">{isDoor ? t('editor.properties.doorSize') : t('editor.properties.windowSize')}</span>
         <div className="dims-grid">
           <div className="dim-field">
-            <label className="dim-label">Width (m)</label>
+            <label className="dim-label">{t('editor.properties.widthM')}</label>
             <input className="panel-input" type="number" min="0.3" max="3" step="0.1"
               value={widthM} onChange={(e) => setWidthM(e.target.value)}
               onBlur={commitWidth} onKeyDown={blurOnEnter}
             />
           </div>
           <div className="dim-field">
-            <label className="dim-label">Height (m)</label>
+            <label className="dim-label">{t('editor.properties.heightM')}</label>
             <input className="panel-input" type="number" min="0.3" max={ceilingM} step="0.1"
               value={heightM} onChange={(e) => setHeightM(e.target.value)}
               onBlur={commitHeight} onKeyDown={blurOnEnter}
@@ -713,7 +736,7 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
         </div>
         {!isDoor && (
           <div className="dim-field">
-            <label className="dim-label">Sill Height (m)</label>
+            <label className="dim-label">{t('editor.properties.sillHeightM')}</label>
             <input className="panel-input" type="number" min="0" max={ceilingM - 0.3} step="0.1"
               value={sillM} onChange={(e) => setSillM(e.target.value)}
               onBlur={commitSill} onKeyDown={blurOnEnter}
@@ -731,6 +754,73 @@ function FixtureProperties({ fixtureId, geo, ceilingM, updateRoom, roomId }: {
         />
       )}
     </>
+  )
+}
+
+// ── Fixture Style Swatches (variant swap for selected door/window) ──────────
+
+function FixtureStyleSwatches({ fixture, isDoor, roomId }: {
+  fixture: RoomDoor | RoomWindow
+  isDoor: boolean
+  roomId: string
+}) {
+  const { t } = useTranslation()
+  const categories = useCatalogStore((s) => s.categories)
+  const items = useCatalogStore((s) => s.items)
+  const variantsMap = useCatalogStore((s) => s.variants)
+  const loadItems = useCatalogStore((s) => s.loadItems)
+  const loadVariantsForItem = useCatalogStore((s) => s.loadVariantsForItem)
+  const switchFixtureVariant = useCanvasStore((s) => s.switchFixtureVariant)
+
+  useEffect(() => {
+    if (items.length === 0) loadItems()
+  }, [items.length, loadItems])
+
+  const targetCategoryName = isDoor ? 'Door' : 'Window'
+  const category = categories.find((c) => c.name === targetCategoryName)
+  const fixtureItems = category
+    ? items.filter((i) => i.category_id === category.id && i.status === 'approved')
+    : []
+
+  useEffect(() => {
+    for (const item of fixtureItems) {
+      if (!variantsMap[item.id]) loadVariantsForItem(item.id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixtureItems.length])
+
+  const allVariants = fixtureItems.flatMap((item) =>
+    (variantsMap[item.id] ?? [])
+      .filter((v) => v.render_status === 'completed')
+      .map((v) => ({ item, variant: v }))
+  )
+
+  if (allVariants.length === 0) return null
+
+  return (
+    <div className="panel-section">
+      <span className="section-title">{t('editor.properties.fixtureStyle')}</span>
+      <div className="fp-swatch-grid">
+        {allVariants.map(({ item, variant }) => {
+          const isSelected = fixture.variant_id === variant.id
+          const thumb = variant.original_image_urls?.[0]
+          return (
+            <button
+              key={variant.id}
+              className={`fp-swatch ${isSelected ? 'selected' : ''}`}
+              onClick={() => void switchFixtureVariant(roomId, fixture.id, variant.id)}
+              title={`${item.name} — ${variant.color_name}`}
+            >
+              {thumb ? (
+                <img src={thumb} alt={variant.color_name} className="fp-swatch-img" />
+              ) : (
+                <span className="fp-swatch-text">{variant.color_name.slice(0, 2)}</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -753,6 +843,7 @@ function CurtainControls({ win, geo, roomId, updateRoom }: {
   roomId: string
   updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
 }) {
+  const { t } = useTranslation()
   const style = (win.curtain_style ?? 'none') as CurtainStyle
   const color = win.curtain_color ?? '#F5F0E8'
   const [hexInput, setHexInput] = useState(color)
@@ -786,23 +877,28 @@ function CurtainControls({ win, geo, roomId, updateRoom }: {
     <>
       <div className="panel-divider" />
       <div className="panel-section">
-        <span className="section-title">CURTAIN</span>
+        <span className="section-title">{t('editor.properties.curtain')}</span>
         <div className="curtain-style-row">
-          {(['none', 'open', 'closed'] as CurtainStyle[]).map((s) => (
-            <button
-              key={s}
-              className={`curtain-style-btn ${style === s ? 'active' : ''}`}
-              onClick={() => updateWindow({ curtain_style: s })}
-            >
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
+          {(['none', 'open', 'closed'] as CurtainStyle[]).map((s) => {
+            const label = s === 'none' ? t('editor.properties.curtainStyleNone')
+              : s === 'open' ? t('editor.properties.curtainStyleOpen')
+              : t('editor.properties.curtainStyleClosed')
+            return (
+              <button
+                key={s}
+                className={`curtain-style-btn ${style === s ? 'active' : ''}`}
+                onClick={() => updateWindow({ curtain_style: s })}
+              >
+                {label}
+              </button>
+            )
+          })}
         </div>
 
         {style !== 'none' && (
           <>
             <div className="curtain-color-row">
-              <label className="dim-label">Color</label>
+              <label className="dim-label">{t('editor.properties.curtainColor')}</label>
               <div className="curtain-color-input">
                 <input
                   type="color"
@@ -1154,39 +1250,6 @@ const panelStyle = `
   .fixture-delete:hover {
     color: var(--color-error);
     background: rgba(229, 77, 66, 0.08);
-  }
-  .fixture-add-row {
-    display: flex;
-    gap: 6px;
-    margin-top: 4px;
-  }
-  .fixture-add-btn {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 6px;
-    border-radius: 7px;
-    border: 1.5px dashed var(--color-border-custom);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-size: 11px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .fixture-add-btn:hover {
-    border-color: var(--color-primary-brand);
-    color: var(--color-primary-brand);
-    background: var(--color-primary-brand-light);
-  }
-  .fixture-add-btn.active {
-    border-color: var(--color-primary-brand);
-    border-style: solid;
-    color: white;
-    background: var(--color-primary-brand);
   }
 
   /* Shape edit */
