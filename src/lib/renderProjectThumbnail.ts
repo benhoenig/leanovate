@@ -221,8 +221,10 @@ async function renderIsometric(
 
     const wallColor = getFinishHex(room.finishes?.wall?.material_id, 'wall', finishMaterials)
     const floorColor = getFinishHex(room.finishes?.floor?.material_id, 'floor', finishMaterials)
-    const doorColor = getFinishHex(room.finishes?.door?.material_id, 'door', finishMaterials)
-    const windowColor = getFinishHex(room.finishes?.window?.material_id, 'window', finishMaterials)
+    // Doors/windows are fixtures (not finishes) — hardcoded fallback panel
+    // colors for when the placed variant has no `.glb` yet.
+    const doorColor = '#C4B8A8'
+    const windowColor = '#DDEEFF'
 
     // ── Floor ───────────────────────────────────────────────────────────────
     const floorShape = new THREE.Shape()
@@ -561,7 +563,7 @@ function addPlaceholder(
 
 function getFinishHex(
   materialId: string | null | undefined,
-  type: 'wall' | 'floor' | 'door' | 'window' | 'lighting',
+  type: 'wall' | 'floor' | 'lighting',
   finishMaterials: FinishMaterial[],
 ): string {
   const defaultHex = type === 'floor' ? '#C4A882' : '#FFFFFF'

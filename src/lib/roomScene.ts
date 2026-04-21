@@ -35,6 +35,84 @@ export function getFinishHex(
   return type === 'floor' ? '#C4A882' : '#FFFFFF'
 }
 
+// ── Surface textures (walls + floors) ────────────────────────────────────────
+
+export interface FinishAppearance {
+  /** Fallback solid color — used while the texture loads, or when no texture. */
+  color: string
+  /** Tileable texture image URL. Undefined means flat color only. */
+  textureUrl?: string
+  /** Real-world size of one texture repeat, in cm. Defaults to 200cm. */
+  tileSizeCm?: number
+}
+
+export function getFinishAppearance(
+  materialId: string | null | undefined,
+  type: 'wall' | 'floor',
+  finishMaterials: FinishMaterial[]
+): FinishAppearance {
+  const defaultColor = type === 'floor' ? '#C4A882' : '#FFFFFF'
+  if (!materialId) return { color: defaultColor }
+  const mat = finishMaterials.find((m) => m.id === materialId)
+  if (!mat) return { color: defaultColor }
+  const color = mat.thumbnail_path.startsWith('#') ? mat.thumbnail_path : defaultColor
+  return {
+    color,
+    textureUrl: mat.texture_url ?? undefined,
+    tileSizeCm: mat.tile_size_cm ?? undefined,
+  }
+}
+
+// Textures are shared across meshes — a room with 4 walls on the same finish
+// shares one GPU texture. UV tiling is baked into the mesh UVs (see
+// setWorldSpaceUVs) so the shared texture stays at repeat=(1,1) regardless
+// of surface size.
+const textureCache = new Map<string, THREE.Texture>()
+const textureLoader = new THREE.TextureLoader()
+
+export function getSharedTexture(url: string): THREE.Texture {
+  const cached = textureCache.get(url)
+  if (cached) return cached
+  const tex = textureLoader.load(url)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.anisotropy = 8
+  textureCache.set(url, tex)
+  return tex
+}
+
+/**
+ * Rewrites a geometry's UVs so `(u, v) = (local_x / tileSizeM, local_y / tileSizeM)`.
+ * Bakes the physical repeat rate into the mesh so the shared texture stays
+ * at repeat=(1,1) regardless of surface size. Works for both ShapeGeometry
+ * and PlaneGeometry in their local XY plane.
+ */
+export function setWorldSpaceUVs(geo: THREE.BufferGeometry, tileSizeM: number): void {
+  const pos = geo.attributes.position
+  if (!pos) return
+  const count = pos.count
+  const arr = pos.array as ArrayLike<number>
+  const uv = new Float32Array(count * 2)
+  for (let i = 0; i < count; i++) {
+    uv[i * 2] = arr[i * 3] / tileSizeM
+    uv[i * 2 + 1] = arr[i * 3 + 1] / tileSizeM
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+}
+
+export function applyFinishTexture(
+  material: THREE.MeshStandardMaterial,
+  appearance: FinishAppearance
+): void {
+  if (!appearance.textureUrl) return
+  material.map = getSharedTexture(appearance.textureUrl)
+  material.color.set(0xffffff)
+  material.needsUpdate = true
+}
+
+const DEFAULT_TILE_SIZE_CM = 200
+
 // ── Room shell ────────────────────────────────────────────────────────────────
 
 /**
@@ -81,10 +159,12 @@ export function buildRoomShell(
   const vertices = getVertices(room)
   const ceilingH = (room.ceiling_height_cm ?? 260) / 100
 
-  const wallColor = getFinishHex(room.finishes?.wall?.material_id, 'wall', finishMaterials)
-  const floorColor = getFinishHex(room.finishes?.floor?.material_id, 'floor', finishMaterials)
-  const doorColor = getFinishHex(room.finishes?.door?.material_id, 'door', finishMaterials)
-  const windowColor = getFinishHex(room.finishes?.window?.material_id, 'window', finishMaterials)
+  const wallApp = getFinishAppearance(room.finishes?.wall?.material_id, 'wall', finishMaterials)
+  const floorApp = getFinishAppearance(room.finishes?.floor?.material_id, 'floor', finishMaterials)
+  // Doors/windows are placed fixtures (not finishes). Hardcoded fallback
+  // colors for the "no variant picked / not yet loaded" path.
+  const doorFallbackColor = 0xC4B8A8
+  const windowFallbackColor = 0xDDEEFF
 
   // ── Floor + ceiling ───────────────────────────────────────────────────────
   const floorShape = new THREE.Shape()
@@ -95,12 +175,16 @@ export function buildRoomShell(
   floorShape.closePath()
 
   const floorGeo = new THREE.ShapeGeometry(floorShape)
+  if (floorApp.textureUrl) {
+    setWorldSpaceUVs(floorGeo, (floorApp.tileSizeCm ?? DEFAULT_TILE_SIZE_CM) / 100)
+  }
   const floorMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(floorColor),
+    color: new THREE.Color(floorApp.color),
     roughness: 0.7,
     metalness: 0.05,
     side: THREE.DoubleSide,
   })
+  applyFinishTexture(floorMat, floorApp)
   const floorMesh = new THREE.Mesh(floorGeo, floorMat)
   floorMesh.rotation.x = Math.PI / 2
   floorMesh.receiveShadow = true
@@ -123,20 +207,25 @@ export function buildRoomShell(
   scene.add(ceilingMesh)
 
   // ── Walls ─────────────────────────────────────────────────────────────────
+  // Walls share one material; each wall's geometry carries its own
+  // world-space UVs so the texture tiles at the correct physical scale per
+  // wall length.
+  const wallTileM = (wallApp.tileSizeCm ?? DEFAULT_TILE_SIZE_CM) / 100
   const wallMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(wallColor),
+    color: new THREE.Color(wallApp.color),
     roughness: 0.6,
     metalness: 0,
     side: wallSide,
   })
+  applyFinishTexture(wallMat, wallApp)
   const doorMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(doorColor),
+    color: doorFallbackColor,
     roughness: 0.4,
     metalness: 0.05,
     side: wallSide,
   })
   const windowGlassMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(windowColor),
+    color: windowFallbackColor,
     roughness: 0.1,
     metalness: 0.2,
     transparent: true,
@@ -166,6 +255,7 @@ export function buildRoomShell(
 
     if (wallDoors.length === 0 && wallWindows.length === 0) {
       const wallGeo = new THREE.PlaneGeometry(wallLen, ceilingH)
+      if (wallApp.textureUrl) setWorldSpaceUVs(wallGeo, wallTileM)
       const wall = new THREE.Mesh(wallGeo, wallMat)
       wall.position.set((a.u + b.u) / 2, ceilingH / 2, (a.v + b.v) / 2)
       wall.rotation.y = -angle
@@ -381,6 +471,7 @@ export function buildRoomShell(
     }
 
     const wallGeo = new THREE.ShapeGeometry(wallShape)
+    if (wallApp.textureUrl) setWorldSpaceUVs(wallGeo, wallTileM)
     const wall = new THREE.Mesh(wallGeo, wallMat)
     wall.position.set(a.u, 0, a.v)
     wall.rotation.y = -angle

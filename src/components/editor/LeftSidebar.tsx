@@ -10,7 +10,11 @@ import CatalogPanel from './CatalogPanel'
 import FixturePickerPanel from './FixturePickerPanel'
 import TemplatePanel from './TemplatePanel'
 
-const FINISH_TYPES: FinishType[] = ['wall', 'floor', 'door', 'window', 'lighting']
+// Door + window finishes were dropped — those are placed fixtures now.
+// Lighting is deferred (backlog): hide from the picker but keep the type
+// available so a future ceiling-light UI can slot back in without a schema
+// change.
+const FINISH_TYPES: FinishType[] = ['wall', 'floor']
 
 export default function LeftSidebar() {
   const { t } = useTranslation()
@@ -63,9 +67,23 @@ export default function LeftSidebar() {
       showToast(t('editor.finishes.uploadFailed'), 'error')
       return
     }
+    // For wall/floor uploads, also wire the image as a tileable texture
+    // (default 200cm repeat — designer can't override this in v1; if tiling
+    // looks off they re-upload a differently-cropped image). Doors, windows,
+    // and lighting uploads keep texture_url null — those surfaces render as
+    // flat color for now.
+    const isTileableType = type === 'wall' || type === 'floor'
     const { data: matData, error: insertError } = await supabase
       .from('finish_materials')
-      .insert({ type, name: file.name, thumbnail_path: publicUrl, is_custom: true, uploaded_by: user.id })
+      .insert({
+        type,
+        name: file.name,
+        thumbnail_path: publicUrl,
+        texture_url: isTileableType ? publicUrl : null,
+        tile_size_cm: isTileableType ? 200 : null,
+        is_custom: true,
+        uploaded_by: user.id,
+      })
       .select()
       .single()
     if (insertError) {
@@ -211,6 +229,33 @@ export default function LeftSidebar() {
             const label = t(`editor.finishes.${type}`)
             const typeLabel = t(`editor.finishes.${type}`).toLowerCase()
 
+            // Split materials into two visual groups. Textures cover the
+            // "real material" case (wood, tile, brick) and plain colors
+            // cover "painted/epoxy finish". Designers pick either.
+            const colors = materials.filter((m) => m.thumbnail_path.startsWith('#'))
+            const textures = materials.filter((m) => !m.thumbnail_path.startsWith('#'))
+
+            const renderSwatch = (mat: typeof materials[number]) => {
+              const isSelected = mat.id === selectedId
+              const isColor = mat.thumbnail_path.startsWith('#')
+              const swatchStyle = isColor
+                ? { background: mat.thumbnail_path }
+                : {
+                    backgroundImage: `url(${mat.thumbnail_path})`,
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                  }
+              return (
+                <button
+                  key={mat.id}
+                  className={`finish-swatch ${isSelected ? 'selected' : ''}`}
+                  onClick={() => handleFinishSelect(type, mat.id)}
+                  title={mat.name}
+                  style={swatchStyle}
+                />
+              )
+            }
+
             return (
               <div key={type} className="finish-group">
                 <div className="finish-group-header">
@@ -231,25 +276,19 @@ export default function LeftSidebar() {
                   </label>
                 </div>
 
-                <div className="finish-swatches">
-                  {materials.map((mat) => {
-                    const isSelected = mat.id === selectedId
-                    const isColor = mat.thumbnail_path.startsWith('#')
-                    return (
-                      <button
-                        key={mat.id}
-                        className={`finish-swatch ${isSelected ? 'selected' : ''}`}
-                        onClick={() => handleFinishSelect(type, mat.id)}
-                        title={mat.name}
-                        style={isColor ? { background: mat.thumbnail_path } : undefined}
-                      >
-                        {!isColor && (
-                          <span className="swatch-label">{mat.name.split(' ').map(w => w[0]).join('').slice(0, 2)}</span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
+                {colors.length > 0 && (
+                  <div className="finish-subgroup">
+                    <span className="finish-subgroup-label">{t('editor.finishes.colors')}</span>
+                    <div className="finish-swatches">{colors.map(renderSwatch)}</div>
+                  </div>
+                )}
+
+                {textures.length > 0 && (
+                  <div className="finish-subgroup">
+                    <span className="finish-subgroup-label">{t('editor.finishes.textures')}</span>
+                    <div className="finish-swatches">{textures.map(renderSwatch)}</div>
+                  </div>
+                )}
               </div>
             )
           })}

@@ -12,7 +12,12 @@ export type RenderApprovalStatus = 'pending' | 'approved' | 'rejected'
 export type LinkStatus = 'active' | 'inactive' | 'unchecked'
 export type BlockSize = 'big' | 'small'
 export type ProjectStatus = 'draft' | 'completed'
-export type FinishType = 'wall' | 'floor' | 'door' | 'window' | 'lighting'
+// NOTE: door/window are no longer finish types — doors and windows are placed
+// individually as fixtures (see FixturePickerPanel + placed_furniture). The
+// DB enum still has them for historical rows but the app never writes new
+// ones. Lighting stays as a type placeholder for the deferred ceiling-light
+// feature (hidden from the UI for now).
+export type FinishType = 'wall' | 'floor' | 'lighting'
 export type CurtainStyle = 'none' | 'open' | 'closed'
 export type MountType = 'floor' | 'wall'
 
@@ -46,8 +51,6 @@ export interface Project {
 export interface RoomFinishes {
   wall?: { material_id: string | null; custom_url: string | null }
   floor?: { material_id: string | null; custom_url: string | null }
-  door?: { material_id: string | null; custom_url: string | null }
-  window?: { material_id: string | null; custom_url: string | null }
   lighting?: { material_id: string | null; custom_url: string | null }
 }
 
@@ -201,6 +204,8 @@ export interface FinishMaterial {
   type: FinishType
   name: string
   thumbnail_path: string
+  texture_url: string | null
+  tile_size_cm: number | null
   is_custom: boolean
   uploaded_by: string | null
   created_at: string

@@ -13,6 +13,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { rawStorageDownload } from './supabase'
 import { getVertices, polygonCentroid, signedArea } from './roomGeometry'
+import { getFinishAppearance, setWorldSpaceUVs, applyFinishTexture } from './roomScene'
 import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, RoomDoor, RoomWindow } from '@/types'
 
 const PREVIEW_WIDTH = 1920
@@ -104,9 +105,10 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
   const ceilingH = (room.ceiling_height_cm ?? 260) / 100 // metres
   const centroid = polygonCentroid(vertices)
 
-  // Get finish colors
-  const wallColor = getFinishHex(room.finishes?.wall?.material_id, 'wall', finishMaterials)
-  const floorColor = getFinishHex(room.finishes?.floor?.material_id, 'floor', finishMaterials)
+  // Finish appearances (color + optional tileable texture for walls/floors)
+  const wallApp = getFinishAppearance(room.finishes?.wall?.material_id, 'wall', finishMaterials)
+  const floorApp = getFinishAppearance(room.finishes?.floor?.material_id, 'floor', finishMaterials)
+  const wallTileM = (wallApp.tileSizeCm ?? 200) / 100
 
   // ── Floor ──────────────────────────────────────────────────────────────────
   const floorShape = new THREE.Shape()
@@ -117,12 +119,16 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
   floorShape.closePath()
 
   const floorGeo = new THREE.ShapeGeometry(floorShape)
+  if (floorApp.textureUrl) {
+    setWorldSpaceUVs(floorGeo, (floorApp.tileSizeCm ?? 200) / 100)
+  }
   const floorMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(floorColor),
+    color: new THREE.Color(floorApp.color),
     roughness: 0.7,
     metalness: 0.05,
     side: THREE.DoubleSide,
   })
+  applyFinishTexture(floorMat, floorApp)
   const floorMesh = new THREE.Mesh(floorGeo, floorMat)
   floorMesh.rotation.x = Math.PI / 2
   floorMesh.receiveShadow = true
@@ -144,23 +150,23 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
 
   // ── Walls (with door/window cutouts) ───────────────────────────────────────
   const wallMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(wallColor),
+    color: new THREE.Color(wallApp.color),
     roughness: 0.6,
     metalness: 0,
     side: THREE.DoubleSide,
   })
+  applyFinishTexture(wallMat, wallApp)
 
-  const doorColor = getFinishHex(room.finishes?.door?.material_id, 'door', finishMaterials)
-  const windowColor = getFinishHex(room.finishes?.window?.material_id, 'window', finishMaterials)
-
+  // Doors/windows are fixtures now (not finishes). Hardcoded fallback panel
+  // colors for the "no variant / not yet loaded" path.
   const doorMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(doorColor),
+    color: 0xC4B8A8,
     roughness: 0.4,
     metalness: 0.05,
     side: THREE.DoubleSide,
   })
   const windowGlassMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(windowColor),
+    color: 0xDDEEFF,
     roughness: 0.1,
     metalness: 0.2,
     transparent: true,
@@ -191,6 +197,7 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
 
     if (wallDoors.length === 0 && wallWindows.length === 0) {
       const wallGeo = new THREE.PlaneGeometry(wallLen, ceilingH)
+      if (wallApp.textureUrl) setWorldSpaceUVs(wallGeo, wallTileM)
       const wall = new THREE.Mesh(wallGeo, wallMat)
       wall.position.set((a.u + b.u) / 2, ceilingH / 2, (a.v + b.v) / 2)
       wall.rotation.y = -angle
@@ -286,6 +293,7 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
       }
 
       const wallGeo = new THREE.ShapeGeometry(wallShape)
+      if (wallApp.textureUrl) setWorldSpaceUVs(wallGeo, wallTileM)
       const wall = new THREE.Mesh(wallGeo, wallMat)
       wall.position.set(a.u, 0, a.v)
       wall.rotation.y = -angle
@@ -693,21 +701,6 @@ async function renderHDPreview(params: RenderParams): Promise<RenderResult> {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
-
-function getFinishHex(
-  materialId: string | null | undefined,
-  type: string,
-  finishMaterials: FinishMaterial[]
-): string {
-  if (!materialId) {
-    return type === 'floor' ? '#C4A882' : '#FFFFFF'
-  }
-  const mat = finishMaterials.find((m) => m.id === materialId)
-  if (!mat) return type === 'floor' ? '#C4A882' : '#FFFFFF'
-
-  if (mat.thumbnail_path.startsWith('#')) return mat.thumbnail_path
-  return type === 'floor' ? '#C4A882' : '#FFFFFF'
-}
 
 /** Mirror canvas horizontally and export as PNG blob. */
 async function mirrorAndExport(canvas: HTMLCanvasElement): Promise<Blob> {

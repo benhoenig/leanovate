@@ -161,6 +161,8 @@
       "door": "DOOR",
       "window": "WINDOW",
       "lighting": "LIGHTING",
+      "colors": "Colors",
+      "textures": "Textures",
       "uploadCustom": "Upload custom {{type}}",
       "uploading": "Uploading...",
       "uploadFailed": "Upload failed",

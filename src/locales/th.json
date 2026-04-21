@@ -161,6 +161,8 @@
       "door": "ประตู",
       "window": "หน้าต่าง",
       "lighting": "แสงไฟ",
+      "colors": "สี",
+      "textures": "พื้นผิว",
       "uploadCustom": "อัปโหลด{{type}}เอง",
       "uploading": "กำลังอัปโหลด...",
       "uploadFailed": "อัปโหลดไม่สำเร็จ",
