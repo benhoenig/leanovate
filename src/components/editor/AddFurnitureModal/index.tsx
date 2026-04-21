@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useRenderQueueStore } from '@/stores/useRenderQueueStore'
 import { useUIStore } from '@/stores/useUIStore'
 import Step1Form from './Step1Form'
 import Step2Variants from './Step2Variants'
@@ -21,7 +22,8 @@ interface Props {
 
 export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }: Props) {
   const { t } = useTranslation()
-  const { categories, styles, createItem, createVariant, loadCategories, loadStyles } = useCatalogStore()
+  const { categories, styles, createItem, loadCategories, loadStyles } = useCatalogStore()
+  const enqueueVariant = useRenderQueueStore((s) => s.enqueueVariant)
 
   const isWallMode = mountTypeFilter === 'wall'
   const visibleCategories = categories.filter((c) => (c.mount_type ?? 'floor') === mountTypeFilter)
@@ -57,7 +59,7 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
 
   // ── Step 2 state ────────────────────────────────────────────────────────────
   const [variants, setVariants] = useState<VariantDraft[]>([newVariantDraft()])
-  const [isSavingVariants, setIsSavingVariants] = useState(false)
+  const [isSavingVariants] = useState(false)
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   // Revoke object URLs when drafts are removed/replaced
@@ -286,78 +288,28 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
       return
     }
 
-    setIsSavingVariants(true)
-    try {
-      for (let i = 0; i < validVariants.length; i++) {
-        const draft = validVariants[i]
-
-        setVariants((prev) =>
-          prev.map((v) => (v.id === draft.id ? { ...v, uploading: true, uploadedCount: 0 } : v))
-        )
-
-        // Upload all images for this variant (sequential — avoids Supabase rate limits on shared anon token)
-        const imageUrls: string[] = []
-        let uploadError: string | null = null
-        for (let j = 0; j < draft.images.length; j++) {
-          const img = draft.images[j]
-          const { url: imageUrl, error } = await useCatalogStore.getState().uploadVariantImage(
-            `${createdItemId}_${draft.id}`,
-            img.file
-          )
-          if (error || !imageUrl) {
-            uploadError = error ?? t('addFurniture.errorUploadFailed')
-            break
-          }
-          imageUrls.push(imageUrl)
-          setVariants((prev) =>
-            prev.map((v) => (v.id === draft.id ? { ...v, uploadedCount: j + 1 } : v))
-          )
-        }
-
-        if (uploadError) {
-          setVariants((prev) =>
-            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: uploadError } : v))
-          )
-          continue
-        }
-
-        // Create variant row — this also kicks off the TRELLIS pipeline
-        // (unless the item is flat, in which case the catalog store skips it).
-        const { id: variantId, error: createError } = await createVariant({
-          furniture_item_id: createdItemId,
-          color_name: draft.color_name.trim(),
-          original_image_urls: imageUrls,
-          price_thb: draft.price_thb ? Number(draft.price_thb) : undefined,
-          source_url: draft.source_url.trim() || undefined,
-          sort_order: i,
-        })
-
-        if (createError || !variantId) {
-          setVariants((prev) =>
-            prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, error: createError ?? t('addFurniture.errorVariantFailed') } : v))
-          )
-          continue
-        }
-
-        setVariants((prev) =>
-          prev.map((v) => (v.id === draft.id ? { ...v, uploading: false, done: true } : v))
-        )
-      }
-
-      const isFlat = useCatalogStore.getState().isItemFlat(createdItemId)
-      showToast(
-        isFlat
-          ? t('addFurniture.toastFlatReady')
-          : t('addFurniture.toastGenerating'),
-        'success'
-      )
-      onClose()
-    } catch (err) {
-      console.error('[SaveVariants] Unexpected error:', err)
-      showToast(t('addFurniture.errorGeneric', { detail: String(err) }), 'error')
-    } finally {
-      setIsSavingVariants(false)
+    // Enqueue each variant into the background render queue and close
+    // immediately. Uploads, createVariant, and TRELLIS all run in the queue
+    // worker — progress surfaces in the RenderQueueTray (Phase C).
+    const itemName = name.trim() || t('addFurniture.unnamedItem', { defaultValue: 'Untitled' })
+    for (let i = 0; i < validVariants.length; i++) {
+      const draft = validVariants[i]
+      enqueueVariant(createdItemId, itemName, {
+        draftId: draft.id,
+        colorName: draft.color_name.trim(),
+        images: draft.images.map((img) => img.file),
+        price_thb: draft.price_thb ? Number(draft.price_thb) : undefined,
+        source_url: draft.source_url.trim() || undefined,
+        sort_order: i,
+      })
     }
+
+    const isFlat = useCatalogStore.getState().isItemFlat(createdItemId)
+    showToast(
+      isFlat ? t('addFurniture.toastFlatReady') : t('addFurniture.toastGenerating'),
+      'success'
+    )
+    onClose()
   }
 
   // ─── Toggle style ──────────────────────────────────────────────────────────

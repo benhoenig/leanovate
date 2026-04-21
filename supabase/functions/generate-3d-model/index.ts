@@ -92,10 +92,16 @@ serve(async (req) => {
     }
 
     // 4. Call TRELLIS with all images
-    const prediction = await createReplicatePrediction(replicateToken, signedUrls)
+    const { prediction, error: replicateError } = await createReplicatePrediction(
+      replicateToken,
+      signedUrls,
+    )
     if (!prediction?.id) {
       await markFailed(supabase, variant_id)
-      return jsonError('Failed to start TRELLIS prediction', 500)
+      return jsonError(
+        `Failed to start TRELLIS prediction: ${replicateError ?? 'unknown Replicate error'}`,
+        500,
+      )
     }
 
     // 5. Poll for completion — TRELLIS takes ~30-60 seconds
@@ -162,7 +168,7 @@ interface ReplicatePrediction {
 async function createReplicatePrediction(
   token: string,
   imageUrls: string[]
-): Promise<ReplicatePrediction | null> {
+): Promise<{ prediction: ReplicatePrediction | null; error: string | null }> {
   const resp = await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST',
     headers: {
@@ -182,10 +188,13 @@ async function createReplicatePrediction(
     }),
   })
   if (!resp.ok) {
-    console.error('Replicate create prediction failed:', resp.status, await resp.text())
-    return null
+    const body = await resp.text()
+    console.error('Replicate create prediction failed:', resp.status, body)
+    // Truncate oversized bodies but keep enough for diagnosis.
+    const snippet = body.length > 400 ? body.slice(0, 400) + '…' : body
+    return { prediction: null, error: `HTTP ${resp.status}: ${snippet}` }
   }
-  return await resp.json()
+  return { prediction: await resp.json(), error: null }
 }
 
 async function pollReplicatePrediction(

@@ -721,5 +721,20 @@
     "modelRejected": "ปฏิเสธโมเดลแล้ว",
     "linkRecheckDone": "ตรวจลิงก์เสร็จสิ้น",
     "confirmClickAgain": "คลิกอีกครั้งเพื่อยืนยันการลบ"
+  },
+  "renderQueue": {
+    "title": "คิวเรนเดอร์",
+    "inProgress": "กำลังเรนเดอร์ {{count}}",
+    "ready": "พร้อม {{count}}",
+    "stageUploading": "กำลังอัปโหลด",
+    "stageCreating": "กำลังสร้างรายการ",
+    "stageTrellis": "กำลังสร้างโมเดล 3 มิติ",
+    "stageReady": "พร้อมให้ตรวจ",
+    "stageFailed": "ล้มเหลว",
+    "review": "ตรวจ",
+    "dismiss": "ปิด",
+    "toastReady": "{{name}} พร้อมให้ตรวจแล้ว",
+    "errorVariantMissing": "ไม่สามารถโหลดรุ่นได้ — ลองรีเฟรชหน้า",
+    "errorItemMissing": "ไม่สามารถโหลดรายการได้ — ลองรีเฟรชหน้า"
   }
 }

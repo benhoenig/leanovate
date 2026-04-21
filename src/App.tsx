@@ -7,6 +7,7 @@ import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
 import EditorPage from '@/pages/EditorPage'
 import AdminPage from '@/pages/AdminPage'
+import RenderQueueTray from '@/components/RenderQueueTray'
 import { Boxes, X } from 'lucide-react'
 
 // Auth-protected route wrapper
@@ -136,6 +137,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Toast />
+      <RenderQueueTray />
       <Routes>
         <Route
           path="/login"

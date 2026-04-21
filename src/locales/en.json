@@ -721,5 +721,20 @@
     "modelRejected": "Model rejected",
     "linkRecheckDone": "Link recheck complete",
     "confirmClickAgain": "Click again to confirm delete"
+  },
+  "renderQueue": {
+    "title": "Renders",
+    "inProgress": "{{count}} rendering",
+    "ready": "{{count}} ready",
+    "stageUploading": "Uploading",
+    "stageCreating": "Creating variant",
+    "stageTrellis": "Generating 3D model",
+    "stageReady": "Ready to approve",
+    "stageFailed": "Failed",
+    "review": "Review",
+    "dismiss": "Dismiss",
+    "toastReady": "{{name}} is ready to review",
+    "errorVariantMissing": "Variant could not be loaded — try refreshing",
+    "errorItemMissing": "Item could not be loaded — try refreshing"
   }
 }
