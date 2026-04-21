@@ -295,4 +295,12 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
     const cat = categories.find((c) => c.id === item.category_id)
     return cat?.is_flat ?? false
   },
+
+  isItemArchitectural: (itemId) => {
+    const { items, categories } = get()
+    const item = items.find((i) => i.id === itemId)
+    if (!item) return false
+    const cat = categories.find((c) => c.id === item.category_id)
+    return cat?.mount_type === 'wall'
+  },
 })

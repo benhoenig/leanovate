@@ -83,6 +83,12 @@ export interface ItemsSlice {
   getFilteredItems: () => FurnitureItem[]
   /** Is the effective flat bypass active for an item? (category.is_flat unless overridden) */
   isItemFlat: (itemId: string) => boolean
+  /**
+   * Is the item an architectural fixture (door/window)? Gated on the parent
+   * category's mount_type = 'wall'. Architectural items skip TRELLIS entirely
+   * — they render as room-shell primitives, not as .glb catalog assets.
+   */
+  isItemArchitectural: (itemId: string) => boolean
 }
 
 export interface VariantsSlice {

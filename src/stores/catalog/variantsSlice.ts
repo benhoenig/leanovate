@@ -76,10 +76,16 @@ export const createVariantsSlice: CatalogSliceCreator<VariantsSlice> = (set, get
       return { id: null, error: 'At least one image is required' }
     }
 
-    const isFlat = get().isItemFlat(data.furniture_item_id)
+    // Two categories of variants skip the TRELLIS pipeline entirely:
+    //   • Flat items (rugs, wall art) — render as textured planes.
+    //   • Architectural items (doors/windows) — render as room-shell
+    //     primitives. TRELLIS produced heavy distortion on framed/glazed
+    //     geometry, so we bypass the pipeline for wall-mount categories.
+    const { isItemFlat, isItemArchitectural } = get()
+    const bypassPipeline =
+      isItemFlat(data.furniture_item_id) ||
+      isItemArchitectural(data.furniture_item_id)
 
-    // Flat items skip TRELLIS entirely → render_status='completed' immediately,
-    // render_approval_status='approved' (no .glb to review).
     const { data: row, error } = await rawInsert<FurnitureVariant>('furniture_variants', {
       furniture_item_id: data.furniture_item_id,
       color_name: data.color_name,
@@ -90,8 +96,8 @@ export const createVariantsSlice: CatalogSliceCreator<VariantsSlice> = (set, get
       depth_cm: data.depth_cm ?? null,
       height_cm: data.height_cm ?? null,
       sort_order: data.sort_order ?? 0,
-      render_status: isFlat ? 'completed' : 'waiting',
-      render_approval_status: isFlat ? 'approved' : 'pending',
+      render_status: bypassPipeline ? 'completed' : 'waiting',
+      render_approval_status: bypassPipeline ? 'approved' : 'pending',
       link_status: 'unchecked',
     })
 
@@ -107,9 +113,9 @@ export const createVariantsSlice: CatalogSliceCreator<VariantsSlice> = (set, get
       }
     })
 
-    // For non-flat items: fire-and-forget the TRELLIS + sprite pipeline.
-    // Render approval happens after sprites come back.
-    if (!isFlat) {
+    // Only fire the TRELLIS pipeline when the bypass isn't active.
+    // Render approval happens when the .glb comes back.
+    if (!bypassPipeline) {
       runRenderPipeline(row.id).catch((err) =>
         console.warn('[createVariant] pipeline error:', err)
       )

@@ -13,7 +13,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { rawStorageDownload } from './supabase'
 import { getVertices, polygonCentroid, signedArea } from './roomGeometry'
-import { getFinishAppearance, setWorldSpaceUVs, applyFinishTexture } from './roomScene'
+import { buildCurtain, getFinishAppearance, setWorldSpaceUVs, applyFinishTexture } from './roomScene'
 import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, RoomDoor, RoomWindow } from '@/types'
 
 const PREVIEW_WIDTH = 1920
@@ -261,35 +261,84 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
         hole.closePath()
         wallShape.holes.push(hole)
 
-        const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
-        const glass = new THREE.Mesh(glassGeo, windowGlassMat)
         const glassLocalX = (x0 + x1) / 2 - wallLen / 2
         const glassLocalY = winSill + winH / 2
         const cosA = Math.cos(-angle)
         const sinA = Math.sin(-angle)
         const midU = (a.u + b.u) / 2
         const midV = (a.v + b.v) / 2
-        glass.position.set(
-          midU + glassLocalX * cosA,
-          glassLocalY,
-          midV - glassLocalX * sinA
-        )
-        glass.rotation.y = -angle
-        scene.add(glass)
-
-        const frameThickness = 0.04
-        const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
-        const frame = new THREE.Mesh(frameGeo, windowFrameMat)
-        frame.position.copy(glass.position)
-        frame.position.y = glassLocalY
-        frame.rotation.y = -angle
         const { nu, nv } = (() => {
           const len = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
           return { nu: -(b.v - a.v) / len, nv: (b.u - a.u) / len }
         })()
-        frame.position.x -= nu * 0.005
-        frame.position.z -= nv * 0.005
-        scene.add(frame)
+
+        // Mirror roomScene.ts window handling: textured pane if variant has
+        // a photo, otherwise generic glass+frame. No .glb.
+        let winPhotoUrl: string | undefined
+        if (win.variant_id) {
+          for (const list of Object.values(variants)) {
+            const hit = list.find((v) => v.id === win.variant_id)
+            if (hit) { winPhotoUrl = hit.original_image_urls?.[0]; break }
+          }
+        }
+
+        if (winPhotoUrl) {
+          const paneGeo = new THREE.PlaneGeometry(x1 - x0, winH)
+          const tex = new THREE.TextureLoader().load(winPhotoUrl)
+          tex.colorSpace = THREE.SRGBColorSpace
+          const paneMat = new THREE.MeshStandardMaterial({
+            map: tex,
+            side: THREE.DoubleSide,
+            roughness: 0.5,
+          })
+          const pane = new THREE.Mesh(paneGeo, paneMat)
+          pane.position.set(
+            midU + glassLocalX * cosA,
+            glassLocalY,
+            midV - glassLocalX * sinA
+          )
+          pane.rotation.y = -angle
+          pane.castShadow = true
+          scene.add(pane)
+        } else {
+          const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
+          const glass = new THREE.Mesh(glassGeo, windowGlassMat)
+          glass.position.set(
+            midU + glassLocalX * cosA,
+            glassLocalY,
+            midV - glassLocalX * sinA
+          )
+          glass.rotation.y = -angle
+          scene.add(glass)
+
+          const frameThickness = 0.04
+          const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
+          const frame = new THREE.Mesh(frameGeo, windowFrameMat)
+          frame.position.copy(glass.position)
+          frame.position.y = glassLocalY
+          frame.rotation.y = -angle
+          frame.position.x -= nu * 0.005
+          frame.position.z -= nv * 0.005
+          scene.add(frame)
+        }
+
+        if (win.curtain_style && win.curtain_style !== 'none') {
+          const curtainGroup = buildCurtain({
+            style: win.curtain_style,
+            color: win.curtain_color ?? '#F5F0E8',
+            openingWidth: x1 - x0,
+            openingHeight: winH,
+            sill: winSill,
+            ceilingH,
+          })
+          curtainGroup.position.set(
+            midU + glassLocalX * cosA + nu * 0.06,
+            0,
+            midV - glassLocalX * sinA + nv * 0.06,
+          )
+          curtainGroup.rotation.y = -angle
+          scene.add(curtainGroup)
+        }
       }
 
       const wallGeo = new THREE.ShapeGeometry(wallShape)

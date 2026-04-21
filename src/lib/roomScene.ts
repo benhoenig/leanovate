@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getVertices, polygonCentroid } from './roomGeometry'
 import { rawStorageDownload } from './supabase'
-import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture } from '@/types'
+import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture, CurtainStyle } from '@/types'
 
 // ── Finish color resolution ──────────────────────────────────────────────────
 
@@ -300,90 +300,58 @@ export function buildRoomShell(
       const doorX = midU + doorLocalX * cosA
       const doorZ = midV - doorLocalX * sinA
 
+      // Architectural fixtures are never rendered from a .glb — TRELLIS
+      // produced distorted results for framed/glazed geometry. We always
+      // render the cutout + flat panel, optionally textured with the
+      // admin-picked door photo when a variant is selected.
       const variant = door.variant_id && options.resolveVariant
         ? options.resolveVariant(door.variant_id)
         : undefined
 
-      if (variant?.glb_path && variant.render_status === 'completed') {
-        // Render the variant .glb inside the cutout
-        const slot = new THREE.Group()
-        slot.name = `door-slot:${door.id}`
-        slot.position.set(doorX, 0, doorZ)
-        slot.rotation.y = -angle
-        slot.userData.fixtureId = door.id
-        slot.userData.fixtureType = 'door'
-        scene.add(slot)
-        void loadGlb(variant.glb_path).then((source) => {
-          fillWithGlb(slot, source, x1 - x0, 0.06, doorH, 1)
-        }).catch((err) => {
-          console.warn(`[roomScene] door .glb failed for ${door.id}:`, err)
-          const fallbackGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
-          const fallback = new THREE.Mesh(fallbackGeo, doorMat)
-          fallback.position.y = doorLocalY
-          fallback.castShadow = true
-          slot.add(fallback)
+      const slot = new THREE.Group()
+      slot.name = `door-slot:${door.id}`
+      slot.position.set(doorX, doorLocalY, doorZ)
+      slot.rotation.y = -angle
+      slot.userData.fixtureId = door.id
+      slot.userData.fixtureType = 'door'
+      scene.add(slot)
+
+      const panelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
+      const placeholderUrl = variant?.original_image_urls?.[0]
+
+      if (placeholderUrl) {
+        // Render a neutral grey panel immediately so the cutout isn't
+        // empty, then swap in the textured version once the image loads.
+        const initialMat = new THREE.MeshStandardMaterial({
+          color: 0xC4B8A8,
+          side: THREE.DoubleSide,
+          roughness: 0.8,
         })
+        const initialPanel = new THREE.Mesh(panelGeo, initialMat)
+        initialPanel.castShadow = true
+        slot.add(initialPanel)
+
+        new THREE.TextureLoader().load(
+          placeholderUrl,
+          (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace
+            const texturedMat = new THREE.MeshStandardMaterial({
+              map: tex,
+              side: THREE.DoubleSide,
+              roughness: 0.8,
+            })
+            initialPanel.material = texturedMat
+            initialMat.dispose()
+          },
+          undefined,
+          (err) => {
+            console.warn(`[roomScene] door texture failed for ${door.id}:`, err)
+          },
+        )
       } else {
-        // Fallback: generic panel. Log why so we can tell apart the
-        // "no variant picked" vs "variant not loaded" vs "variant has no
-        // .glb" cases without guessing.
-        const reason = !door.variant_id
-          ? 'no variant_id on door record'
-          : !variant
-            ? `variant ${door.variant_id} not loaded in catalog store`
-            : !variant.glb_path
-              ? `variant ${door.variant_id} has no glb_path (render_status=${variant.render_status})`
-              : `variant ${door.variant_id} render_status=${variant.render_status} (not completed)`
-        console.info(`[roomScene] door ${door.id} rendering fallback: ${reason}`)
-
-        // Slot sits in the cutout; populated below — synchronously with a
-        // solid panel, or asynchronously with the uploaded photo as a texture
-        // once it finishes loading.
-        const slot = new THREE.Group()
-        slot.name = `door-fallback-slot:${door.id}`
-        slot.position.set(doorX, doorLocalY, doorZ)
-        slot.rotation.y = -angle
-        slot.userData.fixtureId = door.id
-        slot.userData.fixtureType = 'door'
-        scene.add(slot)
-
-        const panelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
-        const placeholderUrl = variant?.original_image_urls?.[0]
-
-        if (placeholderUrl) {
-          // Render a neutral grey panel immediately so the cutout isn't
-          // empty, then swap in the textured version once the image loads.
-          const initialMat = new THREE.MeshStandardMaterial({
-            color: 0xC4B8A8,
-            side: THREE.DoubleSide,
-            roughness: 0.8,
-          })
-          const initialPanel = new THREE.Mesh(panelGeo, initialMat)
-          initialPanel.castShadow = true
-          slot.add(initialPanel)
-
-          new THREE.TextureLoader().load(
-            placeholderUrl,
-            (tex) => {
-              tex.colorSpace = THREE.SRGBColorSpace
-              const texturedMat = new THREE.MeshStandardMaterial({
-                map: tex,
-                side: THREE.DoubleSide,
-                roughness: 0.8,
-              })
-              initialPanel.material = texturedMat
-              initialMat.dispose()
-            },
-            undefined,
-            (err) => {
-              console.warn(`[roomScene] door placeholder texture failed for ${door.id}:`, err)
-            },
-          )
-        } else {
-          const doorPanel = new THREE.Mesh(panelGeo, doorMat)
-          doorPanel.castShadow = true
-          slot.add(doorPanel)
-        }
+        const doorPanel = new THREE.Mesh(panelGeo, doorMat)
+        doorPanel.castShadow = true
+        slot.add(doorPanel)
       }
     }
 
@@ -412,40 +380,57 @@ export function buildRoomShell(
       const winX = midU + glassLocalX * cosA
       const winZ = midV - glassLocalX * sinA
 
+      // Architectural: never a .glb (TRELLIS distorts windows). Two paths:
+      //   - Variant with uploaded photo → render the photo as an opaque
+      //     textured pane (the photo already shows the full framed window).
+      //   - No variant / no photo → generic semi-transparent glass + grey
+      //     frame for a "generic window" look.
+      // Curtains layer on top either way.
       const winVariant = win.variant_id && options.resolveVariant
         ? options.resolveVariant(win.variant_id)
         : undefined
+      const winPhotoUrl = winVariant?.original_image_urls?.[0]
 
-      if (winVariant?.glb_path && winVariant.render_status === 'completed') {
-        // Render the variant .glb inside the cutout at sill+height/2
-        const slot = new THREE.Group()
-        slot.name = `window-slot:${win.id}`
-        slot.position.set(winX, glassLocalY, winZ)
-        slot.rotation.y = -angle
-        slot.userData.fixtureId = win.id
-        slot.userData.fixtureType = 'window'
-        scene.add(slot)
-        void loadGlb(winVariant.glb_path).then((source) => {
-          // fillWithGlb centers its content at y=size/2; windows want centered on
-          // the slot origin (glassLocalY). Use a sub-group so fill is centered.
-          const centered = new THREE.Group()
-          slot.add(centered)
-          fillWithGlb(centered, source, x1 - x0, 0.06, winH, 1)
-          centered.position.y = -winH / 2
-        }).catch((err) => {
-          console.warn(`[roomScene] window .glb failed for ${win.id}:`, err)
-          renderFallbackWindow()
+      const slot = new THREE.Group()
+      slot.name = `window-slot:${win.id}`
+      slot.userData.fixtureId = win.id
+      slot.userData.fixtureType = 'window'
+
+      const segLen = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
+      const nu = -(b.v - a.v) / segLen
+      const nv = (b.u - a.u) / segLen
+
+      if (winPhotoUrl) {
+        const paneGeo = new THREE.PlaneGeometry(x1 - x0, winH)
+        const initialMat = new THREE.MeshStandardMaterial({
+          color: 0xD8D8D8,
+          side: THREE.DoubleSide,
+          roughness: 0.5,
         })
+        const pane = new THREE.Mesh(paneGeo, initialMat)
+        pane.position.set(winX, glassLocalY, winZ)
+        pane.rotation.y = -angle
+        pane.castShadow = true
+        slot.add(pane)
+
+        new THREE.TextureLoader().load(
+          winPhotoUrl,
+          (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace
+            const texturedMat = new THREE.MeshStandardMaterial({
+              map: tex,
+              side: THREE.DoubleSide,
+              roughness: 0.5,
+            })
+            pane.material = texturedMat
+            initialMat.dispose()
+          },
+          undefined,
+          (err) => {
+            console.warn(`[roomScene] window texture failed for ${win.id}:`, err)
+          },
+        )
       } else {
-        renderFallbackWindow()
-      }
-
-      function renderFallbackWindow() {
-        const slot = new THREE.Group()
-        slot.name = `window-fallback-slot:${win.id}`
-        slot.userData.fixtureId = win.id
-        slot.userData.fixtureType = 'window'
-
         const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
         const glass = new THREE.Mesh(glassGeo, windowGlassMat)
         glass.position.set(winX, glassLocalY, winZ)
@@ -458,16 +443,30 @@ export function buildRoomShell(
         frame.position.copy(glass.position)
         frame.position.y = glassLocalY
         frame.rotation.y = -angle
-
-        // Nudge frame slightly outward so it doesn't z-fight the glass
-        const segLen = Math.sqrt((b.u - a.u) ** 2 + (b.v - a.v) ** 2)
-        const nu = -(b.v - a.v) / segLen
-        const nv = (b.u - a.u) / segLen
         frame.position.x -= nu * 0.005
         frame.position.z -= nv * 0.005
         slot.add(frame)
-        scene.add(slot)
       }
+
+      // Curtains (optional): pleated cloth panels hung at the window opening.
+      if (win.curtain_style && win.curtain_style !== 'none') {
+        const curtainGroup = buildCurtain({
+          style: win.curtain_style,
+          color: win.curtain_color ?? '#F5F0E8',
+          openingWidth: x1 - x0,
+          openingHeight: winH,
+          sill: winSill,
+          ceilingH,
+        })
+        curtainGroup.position.set(winX, 0, winZ)
+        curtainGroup.rotation.y = -angle
+        // Shift toward the room interior so it doesn't z-fight the pane.
+        curtainGroup.position.x += nu * 0.06
+        curtainGroup.position.z += nv * 0.06
+        slot.add(curtainGroup)
+      }
+
+      scene.add(slot)
     }
 
     const wallGeo = new THREE.ShapeGeometry(wallShape)
@@ -484,6 +483,181 @@ export function buildRoomShell(
   }
 
   return { floorMesh, ceilingMesh, walls }
+}
+
+// ── Curtains ─────────────────────────────────────────────────────────────────
+
+/**
+ * Procedural linen-weave normal map. Generated once per tab and shared across
+ * every curtain mesh so we don't burn canvas contexts per window.
+ *
+ * Pattern: soft horizontal + vertical striations with anti-aliased noise,
+ * converted to a normal map via a height-gradient pass. Reads as woven
+ * cloth under `MeshStandardMaterial` scene lighting.
+ */
+let cachedFabricNormal: THREE.Texture | null = null
+function getFabricNormalTexture(): THREE.Texture {
+  if (cachedFabricNormal) return cachedFabricNormal
+
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+
+  const height = new Float32Array(size * size)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const warp = Math.sin(x * (Math.PI / 3)) * 0.35
+      const weft = Math.sin(y * (Math.PI / 3)) * 0.35
+      const noise = (Math.random() - 0.5) * 0.15
+      height[y * size + x] = 0.5 + warp * 0.5 + weft * 0.5 + noise
+    }
+  }
+
+  const img = ctx.createImageData(size, size)
+  const strength = 2.0
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const xl = (x - 1 + size) % size
+      const xr = (x + 1) % size
+      const yu = (y - 1 + size) % size
+      const yd = (y + 1) % size
+      const dx = (height[y * size + xr] - height[y * size + xl]) * strength
+      const dy = (height[yd * size + x] - height[yu * size + x]) * strength
+      const nx = -dx
+      const ny = -dy
+      const nz = 1
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
+      const idx = (y * size + x) * 4
+      img.data[idx] = Math.round(((nx / len) * 0.5 + 0.5) * 255)
+      img.data[idx + 1] = Math.round(((ny / len) * 0.5 + 0.5) * 255)
+      img.data[idx + 2] = Math.round(((nz / len) * 0.5 + 0.5) * 255)
+      img.data[idx + 3] = 255
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.NoColorSpace
+  cachedFabricNormal = tex
+  return tex
+}
+
+/**
+ * Builds a single pleated cloth panel hanging straight down. Deforms the
+ * plane in Z with a sine-wave fold pattern; the normal map supplies the
+ * weave detail so the vertex count stays modest.
+ */
+function buildCurtainPanel(
+  width: number,
+  height: number,
+  numFolds: number,
+  foldDepth: number,
+  color: string,
+): THREE.Mesh {
+  const segsW = Math.max(32, numFolds * 6)
+  const segsH = 16
+  const geo = new THREE.PlaneGeometry(width, height, segsW, segsH)
+  const pos = geo.attributes.position
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i)
+    const y = pos.getY(i)
+    const u = (x + width / 2) / width
+    const yN = (y + height / 2) / height
+    const hemRelax = 1 - 0.15 * (1 - yN)
+    const z = Math.sin(u * Math.PI * 2 * numFolds) * foldDepth * hemRelax
+    pos.setZ(i, z)
+  }
+  geo.computeVertexNormals()
+
+  const uv = geo.attributes.uv
+  const repU = width / 0.15
+  const repV = height / 0.15
+  for (let i = 0; i < uv.count; i++) {
+    uv.setX(i, uv.getX(i) * repU)
+    uv.setY(i, uv.getY(i) * repV)
+  }
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    roughness: 0.95,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    normalMap: getFabricNormalTexture(),
+    normalScale: new THREE.Vector2(0.6, 0.6),
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  return mesh
+}
+
+/**
+ * Builds a curtain group positioned in window-slot-local space.
+ *
+ * Styles:
+ *   - 'closed': single panel covering the full opening + 12cm overhang each side.
+ *   - 'open': two narrow panels gathered to the left and right edges.
+ *
+ * Caller places + rotates the group onto the wall and nudges it toward the
+ * interior side so it doesn't z-fight the glass.
+ */
+export function buildCurtain(args: {
+  style: Exclude<CurtainStyle, 'none'>
+  color: string
+  openingWidth: number
+  openingHeight: number
+  sill: number
+  ceilingH: number
+}): THREE.Group {
+  const { style, color, openingWidth, openingHeight, sill, ceilingH } = args
+
+  const rodY = Math.min(sill + openingHeight + 0.12, ceilingH - 0.05)
+  const rodOverhang = 0.12
+  const rodSpan = openingWidth + rodOverhang * 2
+  const panelHeight = rodY
+  const foldDepth = 0.035
+
+  const group = new THREE.Group()
+  group.name = 'curtain'
+
+  if (style === 'closed') {
+    const panelWidth = rodSpan
+    const numFolds = Math.max(8, Math.round(panelWidth / 0.12))
+    const panel = buildCurtainPanel(panelWidth, panelHeight, numFolds, foldDepth, color)
+    panel.position.set(0, panelHeight / 2, 0)
+    group.add(panel)
+  } else {
+    const panelWidth = rodSpan * 0.32
+    const numFolds = Math.max(6, Math.round(panelWidth / 0.08))
+    const sideOffset = rodSpan / 2 - panelWidth / 2
+
+    const left = buildCurtainPanel(panelWidth, panelHeight, numFolds, foldDepth, color)
+    left.position.set(-sideOffset, panelHeight / 2, 0)
+    group.add(left)
+
+    const right = buildCurtainPanel(panelWidth, panelHeight, numFolds, foldDepth, color)
+    right.position.set(sideOffset, panelHeight / 2, 0)
+    group.add(right)
+  }
+
+  const rodGeo = new THREE.CylinderGeometry(0.015, 0.015, rodSpan, 12)
+  rodGeo.rotateZ(Math.PI / 2)
+  const rodMat = new THREE.MeshStandardMaterial({
+    color: 0x3a3a3a,
+    roughness: 0.5,
+    metalness: 0.6,
+  })
+  const rod = new THREE.Mesh(rodGeo, rodMat)
+  rod.position.set(0, rodY, 0)
+  rod.castShadow = true
+  group.add(rod)
+
+  return group
 }
 
 // ── Lighting ─────────────────────────────────────────────────────────────────

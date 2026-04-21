@@ -32,6 +32,39 @@ export const createRenderSlice: CatalogSliceCreator<RenderSlice> = (set, get) =>
   },
 
   retryRender: async (variantId) => {
+    // Architectural fixtures (doors/windows) skip TRELLIS entirely — if a
+    // designer somehow lands on retryRender for one (e.g. a legacy row
+    // still visible in the approval queue), short-circuit to the bypass
+    // state instead of re-running the pipeline.
+    const state = get()
+    let parentItemId: string | null = null
+    for (const [itemId, list] of Object.entries(state.variants)) {
+      if (list.some((v) => v.id === variantId)) {
+        parentItemId = itemId
+        break
+      }
+    }
+    const architectural = parentItemId
+      ? state.isItemArchitectural(parentItemId)
+      : false
+
+    if (architectural) {
+      const { error } = await rawUpdate('furniture_variants', variantId, {
+        render_approval_status: 'approved',
+        render_status: 'completed',
+        glb_path: null,
+      })
+      if (error) return { error }
+      set((s) => ({
+        variants: mapVariant(s.variants, variantId, {
+          render_approval_status: 'approved' as RenderApprovalStatus,
+          render_status: 'completed' as RenderStatus,
+          glb_path: null,
+        }),
+      }))
+      return { error: null }
+    }
+
     // Reset approval + render status, then re-run pipeline
     const { error } = await rawUpdate('furniture_variants', variantId, {
       render_approval_status: 'pending',
@@ -39,8 +72,8 @@ export const createRenderSlice: CatalogSliceCreator<RenderSlice> = (set, get) =>
       glb_path: null,
     })
     if (error) return { error }
-    set((state) => ({
-      variants: mapVariant(state.variants, variantId, {
+    set((s) => ({
+      variants: mapVariant(s.variants, variantId, {
         render_approval_status: 'pending' as RenderApprovalStatus,
         render_status: 'waiting' as RenderStatus,
         glb_path: null,
