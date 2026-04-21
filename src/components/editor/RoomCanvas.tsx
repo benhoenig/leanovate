@@ -452,14 +452,16 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
 
       const w = cont.clientWidth
       const h = cont.clientHeight
+      const ceilingH = (room0.ceiling_height_cm ?? 260) / 100
       const tmp = new THREE.Vector3()
       for (let i = 0; i < N; i++) {
         const a = verts[i]
         const b = verts[(i + 1) % N]
         const du = b.u - a.u, dv = b.v - a.v
         const lengthCm = Math.round(Math.hypot(du, dv) * 100)
-        // Lift the label slightly above the floor so it reads clearly
-        tmp.set((a.u + b.u) / 2, 0.05, (a.v + b.v) / 2)
+        // Anchor at the wall's top-edge midpoint so the label doesn't cover
+        // the midpoint handle on the floor (which adds a new vertex).
+        tmp.set((a.u + b.u) / 2, ceilingH, (a.v + b.v) / 2)
         tmp.project(cam)
         const el = layer.children[i] as HTMLDivElement
         // Behind the camera: hide
@@ -470,7 +472,8 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         const sx = (tmp.x * 0.5 + 0.5) * w
         const sy = (-tmp.y * 0.5 + 0.5) * h
         el.style.display = 'block'
-        el.style.transform = `translate(-50%, -50%) translate(${sx}px, ${sy}px)`
+        // Nudge the label further up so it floats clearly above the wall top.
+        el.style.transform = `translate(-50%, calc(-50% - 14px)) translate(${sx}px, ${sy}px)`
         el.textContent = `${lengthCm} cm`
       }
     }
@@ -1227,6 +1230,27 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     }
 
     const onPointerMove = (e: PointerEvent) => {
+      // Hover cursor: in shape edit mode, show a grab cursor over vertex
+      // handles, a copy cursor over midpoint "add vertex" handles, and a
+      // move cursor over walls to signal push/pull. Only runs when idle.
+      if (e.buttons === 0 && !vertexDragRef.current && !wallDragRef.current) {
+        const inShapeEdit = useCanvasStore.getState().shapeEditMode
+        if (inShapeEdit) {
+          const handleHover = raycastHandle(e.clientX, e.clientY)
+          if (handleHover?.kind === 'vertex') {
+            container.style.cursor = 'grab'
+          } else if (handleHover?.kind === 'midpoint') {
+            container.style.cursor = 'copy'
+          } else if (raycastWall(e.clientX, e.clientY) != null) {
+            container.style.cursor = 'move'
+          } else {
+            container.style.cursor = ''
+          }
+        } else {
+          container.style.cursor = ''
+        }
+      }
+
       // Vertex drag (shape edit mode)
       const vd = vertexDragRef.current
       if (vd) {
@@ -1629,7 +1653,12 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     function applyWallPush(delta: number) {
       const wd = wallDragRef.current
       if (!wd) return
-      const prevVerts = wd.prevGeometry.vertices
+      // For rectangle-fallback rooms, geometry.vertices is undefined — the
+      // polygon is derived from width_cm/height_cm at read time. Materialize
+      // it so we have something to mutate.
+      const room0 = useProjectStore.getState().rooms.find((r) => r.id === room.id)
+      if (!room0) return
+      const prevVerts = wd.prevGeometry.vertices ?? getVertices(room0)
       if (!prevVerts || prevVerts.length < 3) return
       const N = prevVerts.length
       const iA = wd.vA
