@@ -58,6 +58,35 @@ export default function RenderQueueTray() {
     }
   }, [entries, showToast, t])
 
+  // ── Auto-dismiss ready entries after designer approves or rejects ──────────
+  // Watches each ready entry's variant in the catalog store and drops the
+  // entry the moment render_approval_status leaves 'pending'. Retry keeps the
+  // entry since retryRender flips it back to pending.
+  useEffect(() => {
+    const readyIds = Object.values(entries)
+      .filter((e) => e.stage === 'ready' && e.variantId)
+      .map((e) => ({ entryId: e.id, variantId: e.variantId! }))
+    if (readyIds.length === 0) return
+
+    const check = () => {
+      const st = useCatalogStore.getState()
+      for (const { entryId, variantId } of readyIds) {
+        for (const list of Object.values(st.variants)) {
+          const v = list.find((x) => x.id === variantId)
+          if (v && v.render_approval_status !== 'pending') {
+            dismiss(entryId)
+            break
+          }
+        }
+      }
+    }
+    check()
+    const unsub = useCatalogStore.subscribe((s, prev) => {
+      if (s.variants !== prev.variants) check()
+    })
+    return () => unsub()
+  }, [entries, dismiss])
+
   // ── Tick for elapsed-time refresh (1s) ─────────────────────────────────────
   const [, setTick] = useState(0)
   useEffect(() => {
