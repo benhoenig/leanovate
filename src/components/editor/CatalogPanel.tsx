@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Search, Plus, CheckCircle, Clock, X, MousePointerClick } from 'lucide-react'
+import {
+  Search,
+  Plus,
+  CheckCircle,
+  Clock,
+  X,
+  EyeOff,
+  Eye,
+  Trash2,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -19,6 +30,8 @@ export default function CatalogPanel() {
     searchQuery,
     selectedCategoryId,
     isLoading,
+    showHidden,
+    items,
     loadCategories,
     loadStyles,
     loadItems,
@@ -27,8 +40,13 @@ export default function CatalogPanel() {
     getVariantsForItem,
     setSearchQuery,
     setSelectedCategory,
+    setShowHidden,
     approveItem,
     rejectItem,
+    hideItem,
+    unhideItem,
+    deleteItem,
+    retryRender,
     isItemFlat,
     getPendingRenderApprovalVariants,
   } = useCatalogStore()
@@ -95,6 +113,9 @@ export default function CatalogPanel() {
 
   const visibleCategories = categories.filter((c) => (c.mount_type ?? 'floor') === 'floor')
   const pendingApprovalVariants = getPendingRenderApprovalVariants()
+  const hiddenCount = items.filter(
+    (i) => i.hidden_at != null && floorCategoryIds.has(i.category_id),
+  ).length
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -146,6 +167,21 @@ export default function CatalogPanel() {
           </button>
         ))}
       </div>
+
+      {/* Hidden toggle — only shown when there's something to reveal */}
+      {hiddenCount > 0 && (
+        <div className="catalog-hidden-row">
+          <button
+            className={`hidden-toggle ${showHidden ? 'active' : ''}`}
+            onClick={() => setShowHidden(!showHidden)}
+            title={t('catalog.showHidden')}
+          >
+            {showHidden ? <Eye size={11} /> : <EyeOff size={11} />}
+            <span>{t('catalog.showHidden')}</span>
+            <span className="hidden-count">{hiddenCount}</span>
+          </button>
+        </div>
+      )}
 
       {/* Admin filter */}
       {profile?.role === 'admin' && (
@@ -248,19 +284,42 @@ export default function CatalogPanel() {
           item={detailItem}
           variants={getVariantsForItem(detailItem.id)}
           isAdmin={profile?.role === 'admin'}
+          isOwner={detailItem.submitted_by === profile?.id}
+          isFlat={isItemFlat(detailItem.id)}
           onClose={() => setDetailItemId(null)}
-          onPlaceVariant={(variant) => {
-            useCanvasStore.getState().setPlacementMode(true, detailItem.id, variant.id)
-            setDetailItemId(null)
-          }}
           onReviewVariant={(variant) => {
             setApprovalTarget({ item: detailItem, variant })
+          }}
+          onGenerate3D={(variant) => {
+            retryRender(variant.id)
           }}
           onApproveItem={() => approveItem(detailItem.id)}
           onRejectItem={() => rejectItem(detailItem.id)}
           onSubmitForReview={() =>
             useCatalogStore.getState().submitItemForReview(detailItem.id)
           }
+          onHide={async () => {
+            const { error } = await hideItem(detailItem.id)
+            if (!error) setDetailItemId(null)
+          }}
+          onUnhide={async () => {
+            await unhideItem(detailItem.id)
+          }}
+          onDelete={async () => {
+            if (
+              !window.confirm(
+                t('catalog.deleteConfirm', { name: detailItem.name }),
+              )
+            ) {
+              return
+            }
+            const { error } = await deleteItem(detailItem.id)
+            if (error) {
+              window.alert(error)
+              return
+            }
+            setDetailItemId(null)
+          }}
         />
       )}
 
@@ -361,6 +420,44 @@ export default function CatalogPanel() {
           font-weight: 700;
           min-width: 16px;
           text-align: center;
+        }
+        .catalog-hidden-row {
+          display: flex;
+          gap: 4px;
+          padding: 0 12px 8px;
+          flex-shrink: 0;
+        }
+        .hidden-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 4px 10px;
+          border-radius: 6px;
+          border: none;
+          font-size: 11px;
+          font-weight: 500;
+          font-family: inherit;
+          cursor: pointer;
+          background: var(--color-hover-bg);
+          color: var(--color-text-secondary);
+          transition: all 0.15s;
+        }
+        .hidden-toggle.active {
+          background: var(--color-primary-brand);
+          color: white;
+        }
+        .hidden-count {
+          background: white;
+          color: var(--color-text-secondary);
+          border-radius: 10px;
+          padding: 0 5px;
+          font-size: 10px;
+          font-weight: 700;
+          min-width: 16px;
+          text-align: center;
+        }
+        .hidden-toggle.active .hidden-count {
+          color: var(--color-primary-brand);
         }
         .approval-banner {
           display: flex;
@@ -469,24 +566,36 @@ interface ItemDetailDrawerProps {
   item: FurnitureItem
   variants: FurnitureVariant[]
   isAdmin: boolean
+  isOwner: boolean
+  /** Flat items bypass TRELLIS — never show Generate 3D. */
+  isFlat: boolean
   onClose: () => void
-  onPlaceVariant: (variant: FurnitureVariant) => void
   onReviewVariant: (variant: FurnitureVariant) => void
+  /** Kick off (or retry) TRELLIS generation for a non-flat variant without a usable .glb. */
+  onGenerate3D: (variant: FurnitureVariant) => void
   onApproveItem: () => void
   onRejectItem: () => void
   onSubmitForReview: () => void
+  onHide: () => void
+  onUnhide: () => void
+  onDelete: () => void
 }
 
 function ItemDetailDrawer({
   item,
   variants,
   isAdmin,
+  isOwner,
+  isFlat,
   onClose,
-  onPlaceVariant,
   onReviewVariant,
+  onGenerate3D,
   onApproveItem,
   onRejectItem,
   onSubmitForReview,
+  onHide,
+  onUnhide,
+  onDelete,
 }: ItemDetailDrawerProps) {
   const { t, i18n } = useTranslation()
   const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
@@ -501,12 +610,24 @@ function ItemDetailDrawer({
     return v.original_image_urls[0] ?? null
   }
 
+  // Hide is allowed for admins on any item, and for designers on their own
+  // draft/rejected items (matches the RLS update policy on furniture_items).
+  const canHide =
+    isAdmin || (isOwner && (item.status === 'draft' || item.status === 'rejected'))
+  // Hard delete uses the same rule — any further restrictions (e.g. placed
+  // in a project) are enforced in the store and surfaced via alert().
+  const canDelete = canHide
+  const isHidden = !!item.hidden_at
+
   return (
     <div className="detail-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="detail-box">
         <div className="detail-header">
           <div>
-            <p className="detail-eyebrow">{item.status.toUpperCase()}</p>
+            <p className="detail-eyebrow">
+              {item.status.toUpperCase()}
+              {isHidden && ` · ${t('catalog.itemHiddenTag').toUpperCase()}`}
+            </p>
             <h2 className="detail-title">{item.name}</h2>
           </div>
           <button className="detail-close" onClick={onClose}>
@@ -523,6 +644,16 @@ function ItemDetailDrawer({
             const needsReview = v.render_approval_status === 'pending' && !!v.glb_path
             const isProcessing =
               v.render_status === 'processing' || v.render_status === 'waiting'
+            // Show a Generate 3D button when the pipeline is incomplete for a
+            // non-flat variant: render failed, or no .glb was ever produced
+            // and we're not currently processing. Flat items bypass TRELLIS
+            // by design — never offer generation for them.
+            const canGenerate3D =
+              !isFlat &&
+              !isProcessing &&
+              (v.render_status === 'failed' || !v.glb_path)
+            const generateLabel =
+              v.render_status === 'failed' ? t('catalog.retry3D') : t('catalog.generate3D')
             return (
               <div key={v.id} className="detail-variant">
                 <div className="detail-variant-thumb">
@@ -551,14 +682,20 @@ function ItemDetailDrawer({
                       {t('catalog.review')}
                     </button>
                   )}
-                  <button
-                    className="detail-btn primary"
-                    onClick={() => onPlaceVariant(v)}
-                    disabled={v.render_status === 'failed'}
-                  >
-                    <MousePointerClick size={12} />
-                    {t('catalog.placeOnCanvas')}
-                  </button>
+                  {canGenerate3D && (
+                    <button
+                      className="detail-btn primary"
+                      onClick={() => onGenerate3D(v)}
+                      title={generateLabel}
+                    >
+                      {v.render_status === 'failed' ? (
+                        <RefreshCw size={12} />
+                      ) : (
+                        <Sparkles size={12} />
+                      )}
+                      {generateLabel}
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -585,6 +722,27 @@ function ItemDetailDrawer({
           <button className="detail-btn primary wide" onClick={onSubmitForReview}>
             {t('catalog.submitReview')}
           </button>
+        )}
+
+        {/* Hide + Delete — admin always, owner on own draft/rejected */}
+        {(canHide || canDelete) && (
+          <div className="detail-danger-zone">
+            {canHide && (
+              <button
+                className="detail-btn ghost"
+                onClick={isHidden ? onUnhide : onHide}
+              >
+                {isHidden ? <Eye size={12} /> : <EyeOff size={12} />}
+                {isHidden ? t('catalog.unhideItem') : t('catalog.hideItem')}
+              </button>
+            )}
+            {canDelete && (
+              <button className="detail-btn danger-outline" onClick={onDelete}>
+                <Trash2 size={12} />
+                {t('catalog.deleteItem')}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -769,6 +927,32 @@ function ItemDetailDrawer({
           flex: 1;
           background: var(--color-error);
           color: white;
+        }
+        .detail-btn.ghost {
+          background: transparent;
+          color: var(--color-text-secondary);
+          border-color: var(--color-border-custom);
+        }
+        .detail-btn.ghost:hover {
+          background: var(--color-hover-bg);
+          color: var(--color-text-primary);
+        }
+        .detail-btn.danger-outline {
+          background: transparent;
+          color: var(--color-error);
+          border-color: var(--color-error);
+        }
+        .detail-btn.danger-outline:hover {
+          background: rgba(229, 77, 66, 0.08);
+        }
+        .detail-danger-zone {
+          display: flex;
+          gap: 8px;
+          padding-top: 10px;
+          border-top: 1px solid var(--color-border-custom);
+        }
+        .detail-danger-zone .detail-btn {
+          flex: 1;
         }
         .detail-admin {
           display: flex;

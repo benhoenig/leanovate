@@ -51,8 +51,10 @@ export interface ItemsSlice {
   searchQuery: string
   selectedCategoryId: string | null
   isLoading: boolean
+  /** Include hidden items in `items` + `getFilteredItems` results. Session-local toggle. */
+  showHidden: boolean
 
-  loadItems: (filter?: { status?: ItemStatus }) => Promise<void>
+  loadItems: (filter?: { status?: ItemStatus; includeHidden?: boolean }) => Promise<void>
   createItem: (data: CreateItemInput) => Promise<{ id: string | null; error: string | null }>
   updateItem: (
     id: string,
@@ -64,8 +66,19 @@ export interface ItemsSlice {
   approveItem: (itemId: string) => Promise<void>
   rejectItem: (itemId: string) => Promise<void>
 
+  /** Mark the item as hidden from the catalog grid. Reversible via unhideItem. */
+  hideItem: (itemId: string) => Promise<{ error: string | null }>
+  /** Clear hidden_at/hidden_by on the item. */
+  unhideItem: (itemId: string) => Promise<{ error: string | null }>
+  /**
+   * Hard-delete the item (cascades to variants + styles). Blocks with a
+   * clear error if any placed_furniture row references it — hide instead.
+   */
+  deleteItem: (itemId: string) => Promise<{ error: string | null }>
+
   setSearchQuery: (query: string) => void
   setSelectedCategory: (id: string | null) => void
+  setShowHidden: (show: boolean) => void
 
   getFilteredItems: () => FurnitureItem[]
   /** Is the effective flat bypass active for an item? (category.is_flat unless overridden) */

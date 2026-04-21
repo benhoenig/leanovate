@@ -171,10 +171,14 @@ The parent product record. Holds shared details — no color-specific data. Each
 | submitted_by | uuid | FK → profiles.id, NOT NULL | Designer who added this item |
 | reviewed_by | uuid | FK → profiles.id, nullable | Admin who approved/rejected |
 | reviewed_at | timestamptz | nullable | When the review happened |
+| hidden_at | timestamptz | nullable | Set when the item is hidden from the default catalog view. Reversible (unhide clears to null). Hidden items remain referenceable — existing `placed_furniture` instances keep rendering; only the catalog grid filters them out. |
+| hidden_by | uuid | FK → profiles.id, nullable | Who hid the item. Paired with `hidden_at`. |
 | created_at | timestamptz | NOT NULL, default now() | |
 | updated_at | timestamptz | NOT NULL, default now() | Auto-updated via trigger |
 
-**Indexes:** `category_id`, `submitted_by`, `status`
+**Indexes:** `category_id`, `submitted_by`, `status`, `hidden_at`
+
+**Hide/delete behaviour:** admins can hide or hard-delete any item; designers can hide or hard-delete their own `draft`/`rejected` items (RLS). Hard delete is blocked at the FK level when any `placed_furniture` row references the item — the store surfaces a clearer error and steers the user to Hide instead. Cascade deletes wipe variants and style tags.
 
 #### furniture_item_styles
 

@@ -37,6 +37,8 @@ export interface Project {
   unit_width_cm: number
   unit_height_cm: number
   manual_costs: Record<string, number>
+  /** Cached isometric snapshot of the primary room, shown on dashboard cards. Null until first save. Path in the `thumbnails` bucket: `projects/{project_id}.png`. */
+  thumbnail_path: string | null
   created_at: string
   updated_at: string
 }
@@ -142,6 +144,8 @@ export interface FurnitureItem {
   submitted_by: string
   reviewed_by: string | null
   reviewed_at: string | null
+  hidden_at: string | null
+  hidden_by: string | null
   created_at: string
   updated_at: string
 }

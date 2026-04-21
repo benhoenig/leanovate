@@ -101,7 +101,12 @@
     },
     "createdOn": "Created {{date}}",
     "adminButton": "Admin",
-    "loadingProjects": "Loading projects..."
+    "loadingProjects": "Loading projects...",
+    "refreshThumbnail": "Refresh preview",
+    "refreshingThumbnail": "Rendering preview…",
+    "thumbnailRefreshed": "Preview updated",
+    "thumbnailFailed": "Preview render failed",
+    "noRoomsYet": "No rooms yet"
   },
   "editor": {
     "backToDashboard": "Back to dashboard",
@@ -334,7 +339,17 @@
     "noImage": "No image",
     "needReview_one": "{{count}} 3D model needs review",
     "needReview_other": "{{count}} 3D models need review",
-    "generating3D": "Generating 3D…"
+    "generating3D": "Generating 3D…",
+    "hideItem": "Hide",
+    "unhideItem": "Unhide",
+    "deleteItem": "Delete",
+    "deleteBlockedPlaced": "Can't delete — placed in project(s). Hide instead.",
+    "deleteConfirm": "Delete \"{{name}}\"? This cannot be undone.",
+    "itemHiddenTag": "Hidden",
+    "generate3D": "Generate 3D",
+    "retry3D": "Retry 3D",
+    "showHidden": "Show hidden",
+    "hiddenCount": "{{count}} hidden"
   },
   "fixtures": {
     "addFixture": "Add Fixture",

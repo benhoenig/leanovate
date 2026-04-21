@@ -140,10 +140,13 @@ serve(async (req) => {
       return jsonError('Failed to store .glb: ' + uploadError.message, 500)
     }
 
-    // 8. Update variant with glb_path — client will render sprites + show approval modal
+    // 8. Update variant with glb_path AND flip render_status to 'completed'.
+    // Without writing render_status here, the DB stays at 'processing' forever
+    // — the client's in-memory patch is the only trace of completion, so on
+    // refresh the tile shows "Generating 3D…" indefinitely.
     await supabase
       .from('furniture_variants')
-      .update({ glb_path: glbPath })
+      .update({ glb_path: glbPath, render_status: 'completed' })
       .eq('id', variant_id)
 
     return new Response(

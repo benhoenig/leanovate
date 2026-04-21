@@ -1,5 +1,13 @@
 import type { FurnitureItem, ItemStatus } from '@/types'
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate } from '@/lib/supabase'
+import {
+  supabase,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  getAuthToken,
+  rawInsert,
+  rawUpdate,
+  rawDelete,
+} from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import type { ItemsSlice, CatalogSliceCreator } from './types'
 
@@ -8,6 +16,7 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
   searchQuery: '',
   selectedCategoryId: null,
   isLoading: false,
+  showHidden: false,
 
   loadItems: async (filter) => {
     set({ isLoading: true })
@@ -144,17 +153,85 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
     }))
   },
 
+  hideItem: async (itemId) => {
+    const profile = useAuthStore.getState().profile
+    const hidden_at = new Date().toISOString()
+    const hidden_by = profile?.id ?? null
+    const { error } = await rawUpdate('furniture_items', itemId, { hidden_at, hidden_by })
+    if (error) { console.error('hideItem:', error); return { error } }
+    set((state) => ({
+      items: state.items.map((i) => (i.id === itemId ? { ...i, hidden_at, hidden_by } : i)),
+    }))
+    return { error: null }
+  },
+
+  unhideItem: async (itemId) => {
+    const { error } = await rawUpdate('furniture_items', itemId, {
+      hidden_at: null,
+      hidden_by: null,
+    })
+    if (error) { console.error('unhideItem:', error); return { error } }
+    set((state) => ({
+      items: state.items.map((i) =>
+        i.id === itemId ? { ...i, hidden_at: null, hidden_by: null } : i
+      ),
+    }))
+    return { error: null }
+  },
+
+  deleteItem: async (itemId) => {
+    // Guard: refuse hard-delete when the item is referenced by any
+    // placed_furniture row. The FK would block it anyway — we just surface a
+    // clearer error so the UI can steer the user to Hide instead.
+    const token = getAuthToken()
+    const placedResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/placed_furniture?furniture_item_id=eq.${itemId}&select=id&limit=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: SUPABASE_ANON_KEY,
+        },
+      }
+    )
+    if (placedResp.ok) {
+      const rows = (await placedResp.json()) as unknown[]
+      if (rows.length > 0) {
+        return {
+          error:
+            'This item is placed in one or more projects and cannot be deleted. Hide it instead.',
+        }
+      }
+    }
+
+    const { error } = await rawDelete('furniture_items', itemId)
+    if (error) { console.error('deleteItem:', error); return { error } }
+    set((state) => {
+      const { [itemId]: _removedVariants, ...restVariants } = state.variants
+      const { [itemId]: _removedStyles, ...restStyles } = state.itemStyles
+      void _removedVariants
+      void _removedStyles
+      return {
+        items: state.items.filter((i) => i.id !== itemId),
+        variants: restVariants,
+        itemStyles: restStyles,
+      }
+    })
+    return { error: null }
+  },
+
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSelectedCategory: (id) => set({ selectedCategoryId: id }),
+  setShowHidden: (show) => set({ showHidden: show }),
 
   getFilteredItems: () => {
-    const { items, searchQuery, selectedCategoryId } = get()
+    const { items, searchQuery, selectedCategoryId, showHidden } = get()
     return items.filter((item) => {
       const matchesSearch =
         !searchQuery || item.name.toLowerCase().includes(searchQuery.toLowerCase())
       const matchesCategory =
         !selectedCategoryId || item.category_id === selectedCategoryId
-      return matchesSearch && matchesCategory
+      const matchesHidden = showHidden || !item.hidden_at
+      return matchesSearch && matchesCategory && matchesHidden
     })
   },
 

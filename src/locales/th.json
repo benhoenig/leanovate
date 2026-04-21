@@ -101,7 +101,12 @@
     },
     "createdOn": "สร้างเมื่อ {{date}}",
     "adminButton": "ผู้ดูแลระบบ",
-    "loadingProjects": "กำลังโหลดโปรเจกต์..."
+    "loadingProjects": "กำลังโหลดโปรเจกต์...",
+    "refreshThumbnail": "รีเฟรชภาพตัวอย่าง",
+    "refreshingThumbnail": "กำลังเรนเดอร์ภาพตัวอย่าง…",
+    "thumbnailRefreshed": "อัปเดตภาพตัวอย่างแล้ว",
+    "thumbnailFailed": "เรนเดอร์ภาพตัวอย่างล้มเหลว",
+    "noRoomsYet": "ยังไม่มีห้อง"
   },
   "editor": {
     "backToDashboard": "กลับสู่หน้าหลัก",
@@ -334,7 +339,17 @@
     "noImage": "ไม่มีรูป",
     "needReview_one": "{{count}} โมเดล 3D รอตรวจสอบ",
     "needReview_other": "{{count}} โมเดล 3D รอตรวจสอบ",
-    "generating3D": "กำลังสร้างโมเดล 3D…"
+    "generating3D": "กำลังสร้างโมเดล 3D…",
+    "hideItem": "ซ่อน",
+    "unhideItem": "เลิกซ่อน",
+    "deleteItem": "ลบ",
+    "deleteBlockedPlaced": "ลบไม่ได้ — รายการนี้ถูกวางในโปรเจกต์อยู่ ให้ใช้ซ่อนแทน",
+    "deleteConfirm": "ลบ \"{{name}}\" ใช่ไหม? การกระทำนี้ไม่สามารถย้อนกลับได้",
+    "itemHiddenTag": "ซ่อนอยู่",
+    "generate3D": "สร้างโมเดล 3D",
+    "retry3D": "สร้างโมเดลใหม่",
+    "showHidden": "แสดงรายการที่ซ่อน",
+    "hiddenCount": "ซ่อน {{count}} รายการ"
   },
   "fixtures": {
     "addFixture": "เพิ่มประตู/หน้าต่าง",
