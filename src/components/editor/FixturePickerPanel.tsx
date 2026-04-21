@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, DoorOpen, PanelTop, MousePointerClick, Clock } from 'lucide-react'
+import { Plus, DoorOpen, PanelTop, MousePointerClick, Clock, Trash2 } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -27,6 +27,7 @@ export default function FixturePickerPanel() {
     loadItems,
     loadVariantsForItem,
     getVariantsForItem,
+    deleteItem,
   } = useCatalogStore()
   const items = useCatalogStore((s) => s.items)
   const variantsMap = useCatalogStore((s) => s.variants)
@@ -74,6 +75,14 @@ export default function FixturePickerPanel() {
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems.length])
+
+  const handleDeleteItem = async (item: FurnitureItem) => {
+    if (!window.confirm(t('fixtures.deleteConfirm', { name: item.name }))) return
+    const { error } = await deleteItem(item.id)
+    if (error) {
+      window.alert(error)
+    }
+  }
 
   const handleVariantPick = (item: FurnitureItem, variant: FurnitureVariant) => {
     const category = categories.find((c) => c.id === item.category_id)
@@ -132,7 +141,18 @@ export default function FixturePickerPanel() {
               : variants.filter((v) => v.render_status === 'completed')
             return (
               <div key={item.id} className="fixture-item">
-                <div className="fixture-item-name">{item.name}</div>
+                <div className="fixture-item-header">
+                  <div className="fixture-item-name">{item.name}</div>
+                  {isAdmin && (
+                    <button
+                      className="fixture-item-delete"
+                      onClick={() => handleDeleteItem(item)}
+                      title={t('fixtures.deleteItem')}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
                 <div className="fixture-variants-row">
                   {visibleVariants.map((v) => {
                     const isActive = fixturePlacementVariantId === v.id
@@ -251,10 +271,41 @@ export default function FixturePickerPanel() {
           border: 1px solid var(--color-border-custom);
           border-radius: 8px;
         }
+        .fixture-item-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+        }
         .fixture-item-name {
           font-size: 12px;
           font-weight: 600;
           color: var(--color-text-primary);
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .fixture-item-delete {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          border-radius: 5px;
+          border: 1px solid var(--color-border-custom);
+          background: transparent;
+          color: var(--color-text-secondary);
+          padding: 0;
+          cursor: pointer;
+          transition: all 0.15s;
+          flex-shrink: 0;
+        }
+        .fixture-item-delete:hover {
+          background: var(--color-error);
+          border-color: var(--color-error);
+          color: white;
         }
         .fixture-variants-row {
           display: flex;

@@ -203,6 +203,56 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
       }
     }
 
+    // Guard: fixture items (doors/windows) are referenced from
+    // `rooms.geometry.doors[]` / `rooms.geometry.windows[]` by `variant_id`.
+    // There's no FK on JSONB, so cascading variants would silently leave
+    // dangling references and the shell would render the fallback panel.
+    // Collect this item's variant ids, then scan all rooms.
+    const variantsResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/furniture_variants?furniture_item_id=eq.${itemId}&select=id`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: SUPABASE_ANON_KEY,
+        },
+      }
+    )
+    if (variantsResp.ok) {
+      const variantRows = (await variantsResp.json()) as Array<{ id: string }>
+      const variantIds = new Set(variantRows.map((v) => v.id))
+      if (variantIds.size > 0) {
+        const roomsResp = await fetch(
+          `${SUPABASE_URL}/rest/v1/rooms?select=id,geometry`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              apikey: SUPABASE_ANON_KEY,
+            },
+          }
+        )
+        if (roomsResp.ok) {
+          const roomRows = (await roomsResp.json()) as Array<{
+            id: string
+            geometry: { doors?: Array<{ variant_id?: string }>; windows?: Array<{ variant_id?: string }> } | null
+          }>
+          const referenced = roomRows.some((r) => {
+            const doors = r.geometry?.doors ?? []
+            const windows = r.geometry?.windows ?? []
+            return (
+              doors.some((d) => d.variant_id && variantIds.has(d.variant_id)) ||
+              windows.some((w) => w.variant_id && variantIds.has(w.variant_id))
+            )
+          })
+          if (referenced) {
+            return {
+              error:
+                'This fixture is used as a door or window in one or more rooms and cannot be deleted. Hide it instead.',
+            }
+          }
+        }
+      }
+    }
+
     const { error } = await rawDelete('furniture_items', itemId)
     if (error) { console.error('deleteItem:', error); return { error } }
     set((state) => {

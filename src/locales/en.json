@@ -356,7 +356,9 @@
     "emptyAdmin": "No doors or windows yet. Click \"Add Fixture\" to upload the first style.",
     "emptyDesigner": "No fixtures available yet. An admin will upload door and window styles.",
     "groupEmpty": "No styles yet.",
-    "style": "Style"
+    "style": "Style",
+    "deleteItem": "Delete",
+    "deleteConfirm": "Delete \"{{name}}\"? This cannot be undone."
   },
   "addFurniture": {
     "title": "Add Furniture",
