@@ -33,6 +33,7 @@ interface RenderQueueState {
   entries: Record<string, QueueEntry>
 
   enqueueVariant: (itemId: string, itemName: string, draft: EnqueueDraft) => string
+  enqueueRetry: (variantId: string) => string | null
   dismiss: (id: string) => void
 
   getActive: () => QueueEntry[]
@@ -169,6 +170,51 @@ export const useRenderQueueStore = create<RenderQueueState>((set, get) => ({
     processEntry(id, itemId, draft).catch((err) => {
       console.error('[renderQueue] processEntry crashed:', err)
       patchEntry(id, { stage: 'failed', error: String(err) })
+    })
+
+    return id
+  },
+
+  enqueueRetry: (variantId) => {
+    const catalog = useCatalogStore.getState()
+
+    let variant = null as ReturnType<typeof findVariant>
+    let itemId: string | null = null
+    for (const [iid, list] of Object.entries(catalog.variants)) {
+      const v = list.find((x) => x.id === variantId)
+      if (v) { variant = v; itemId = iid; break }
+    }
+    if (!variant || !itemId) return null
+    const item = catalog.items.find((i) => i.id === itemId)
+    if (!item) return null
+
+    // Re-use an existing entry for this variant so the tray doesn't grow a
+    // duplicate row on each retry. Keeps the original thumbnail blob URL alive.
+    const existing = Object.values(get().entries).find((e) => e.variantId === variantId)
+    const id = existing?.id ?? crypto.randomUUID()
+    const thumbUrl = existing?.thumbUrl ?? variant.original_image_urls[0] ?? null
+
+    const entry: QueueEntry = {
+      id,
+      variantId,
+      itemId,
+      itemName: item.name,
+      colorName: variant.color_name,
+      thumbUrl,
+      stage: 'trellis',
+      uploadedCount: 0,
+      totalImages: 0,
+      startedAt: Date.now(),
+      error: null,
+      isFlat: false,
+    }
+    set((state) => ({ entries: { ...state.entries, [id]: entry } }))
+
+    awaitRenderCompletion(variantId).then((result) => {
+      patchEntry(id, {
+        stage: result === 'completed' ? 'ready' : 'failed',
+        error: result === 'failed' ? 'TRELLIS render failed' : null,
+      })
     })
 
     return id

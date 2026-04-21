@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { X, Check, XCircle, RefreshCw, Loader2 } from 'lucide-react'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useRenderQueueStore } from '@/stores/useRenderQueueStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken } from '@/lib/supabase'
 import type { FurnitureItem, FurnitureVariant } from '@/types'
@@ -180,6 +181,7 @@ export default function ModelApprovalModal({ item, variant, onClose, onNext }: P
         showToast(error, 'error')
         return
       }
+      useRenderQueueStore.getState().enqueueRetry(variant.id)
       showToast(t('modelApproval.regeneratingToast'), 'success')
       onClose()
     } finally {
