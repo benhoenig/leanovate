@@ -37,7 +37,10 @@ function pickTileImage(variants: FurnitureVariant[], isFlat: boolean): string | 
   const anyWithThumb = variants.find((v) => v.thumbnail_path)
   const thumbSource = approvedWithThumb ?? anyWithThumb
   if (thumbSource?.thumbnail_path) {
-    return getPublicStorageUrl('thumbnails', thumbSource.thumbnail_path)
+    const url = getPublicStorageUrl('thumbnails', thumbSource.thumbnail_path)
+    // Cache-bust on updated_at so re-rendered thumbnails at the same path
+    // aren't masked by browser/CDN cache.
+    return `${url}?v=${encodeURIComponent(thumbSource.updated_at)}`
   }
 
   const firstVariant = variants[0]

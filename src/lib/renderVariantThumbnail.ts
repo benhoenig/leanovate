@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { rawStorageDownload, rawStorageUpload } from '@/lib/supabase'
 
 /**
@@ -41,15 +42,28 @@ export async function renderVariantThumbnail(
   renderer.setPixelRatio(1)
   renderer.setClearColor(0x000000, 0)
   renderer.outputColorSpace = THREE.SRGBColorSpace
+  // NeutralToneMapping preserves saturation better than ACES (which
+  // desaturates highlights and makes TRELLIS output look washed out).
+  renderer.toneMapping = THREE.NeutralToneMapping
+  renderer.toneMappingExposure = 0.95
 
   const scene = new THREE.Scene()
-  scene.add(new THREE.AmbientLight(0xffffff, 1.2))
 
-  const keyLight = new THREE.DirectionalLight(0xffffff, 1.4)
+  // Neutral studio environment — gives PBR materials indirect light so
+  // TRELLIS outputs don't read as flat/pale. Dialed down so direct lights
+  // do most of the work and base colors stay vivid.
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+  scene.environment = envTex
+  scene.environmentIntensity = 0.45
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5))
+
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.1)
   keyLight.position.set(5, 8, 6)
   scene.add(keyLight)
 
-  const fillLight = new THREE.DirectionalLight(0xffffff, 0.6)
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
   fillLight.position.set(-5, 3, -4)
   scene.add(fillLight)
 
@@ -123,6 +137,8 @@ export async function renderVariantThumbnail(
   } catch (err) {
     return { path: null, error: String(err) }
   } finally {
+    envTex.dispose()
+    pmrem.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
