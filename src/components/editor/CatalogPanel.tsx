@@ -58,8 +58,12 @@ export default function CatalogPanel() {
     }
   }, [filteredItems.length, loadVariantsForItem])
 
-  // Poll for variant status updates (3D generation in progress)
+  // Poll for variant status updates (3D generation in progress). Gated on
+  // `isLoading` so the poll never fires while the initial `loadItems` or
+  // `loadVariantsForItem` reads are in flight (those use the Supabase client
+  // and would deadlock against a concurrent poll).
   useEffect(() => {
+    if (isLoading) return
     const interval = setInterval(() => {
       const state = useCatalogStore.getState()
       for (const item of filteredItems) {
@@ -73,7 +77,7 @@ export default function CatalogPanel() {
       }
     }, 5000)
     return () => clearInterval(interval)
-  }, [filteredItems, loadVariantsForItem])
+  }, [filteredItems, isLoading, loadVariantsForItem])
 
   // ─── Visible items (hide wall-mount categories — they live in Fixtures tab) ─
 

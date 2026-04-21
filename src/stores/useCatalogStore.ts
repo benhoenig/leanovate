@@ -8,7 +8,7 @@ import type {
   RenderStatus,
   RenderApprovalStatus,
 } from '@/types'
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate } from '@/lib/supabase'
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate, rawSelect } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { renderVariantThumbnail } from '@/lib/renderVariantThumbnail'
 
@@ -246,12 +246,14 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     const missing = unique.filter((id) => !known.has(id))
     if (missing.length === 0) return
     try {
-      const { data, error } = await supabase
-        .from('furniture_variants')
-        .select('*')
-        .in('id', missing)
-      if (error) throw error
-      const fetched = (data ?? []) as FurnitureVariant[]
+      // Raw fetch — avoids colliding with CatalogPanel/EditorPage polling
+      // on the shared Supabase client (see CLAUDE.md #8).
+      const { data, error } = await rawSelect<FurnitureVariant>(
+        'furniture_variants',
+        `id=in.(${missing.join(',')})`,
+      )
+      if (error) throw new Error(error)
+      const fetched = data ?? []
       // Group by parent item id so the existing resolveVariant lookup finds them.
       const byItem = new Map<string, FurnitureVariant[]>()
       for (const v of fetched) {
@@ -509,10 +511,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   // ─── Catalog approval ──────────────────────────────────────────────────────
 
   submitItemForReview: async (itemId) => {
-    const { error } = await supabase
-      .from('furniture_items')
-      .update({ status: 'pending' })
-      .eq('id', itemId)
+    const { error } = await rawUpdate('furniture_items', itemId, { status: 'pending' })
     if (error) { console.error('submitItemForReview:', error); return }
     set((state) => ({
       items: state.items.map((i) =>
@@ -523,14 +522,11 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 
   approveItem: async (itemId) => {
     const profile = useAuthStore.getState().profile
-    const { error } = await supabase
-      .from('furniture_items')
-      .update({
-        status: 'approved',
-        reviewed_by: profile?.id ?? null,
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq('id', itemId)
+    const { error } = await rawUpdate('furniture_items', itemId, {
+      status: 'approved',
+      reviewed_by: profile?.id ?? null,
+      reviewed_at: new Date().toISOString(),
+    })
     if (error) { console.error('approveItem:', error); return }
     set((state) => ({
       items: state.items.map((i) =>
@@ -541,14 +537,11 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 
   rejectItem: async (itemId) => {
     const profile = useAuthStore.getState().profile
-    const { error } = await supabase
-      .from('furniture_items')
-      .update({
-        status: 'rejected',
-        reviewed_by: profile?.id ?? null,
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq('id', itemId)
+    const { error } = await rawUpdate('furniture_items', itemId, {
+      status: 'rejected',
+      reviewed_by: profile?.id ?? null,
+      reviewed_at: new Date().toISOString(),
+    })
     if (error) { console.error('rejectItem:', error); return }
     set((state) => ({
       items: state.items.map((i) =>

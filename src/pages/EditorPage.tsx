@@ -33,12 +33,21 @@ export default function EditorPage() {
 
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
 
-  // Load project + templates on mount
+  // Load project + templates on mount — serialized to avoid concurrent
+  // Supabase client reads (see CLAUDE.md #8). Running these in parallel
+  // caused first-mount "materials didn't load" races when CatalogPanel
+  // polling started before mount loads finished.
   useEffect(() => {
     if (!projectId) return
-    loadProject(projectId)
-    loadFinishMaterials()
-    useTemplateStore.getState().loadAllTemplates()
+    let cancelled = false
+    ;(async () => {
+      await loadProject(projectId)
+      if (cancelled) return
+      await loadFinishMaterials()
+      if (cancelled) return
+      await useTemplateStore.getState().loadAllTemplates()
+    })()
+    return () => { cancelled = true }
   }, [projectId, loadProject, loadFinishMaterials])
 
   // Load placed furniture when room changes
@@ -90,7 +99,15 @@ export default function EditorPage() {
   // path would otherwise collide with CatalogPanel/FixturePicker polls).
   useEffect(() => {
     if (!selectedRoomId) return
-    const interval = setInterval(async () => {
+    // Offset from CatalogPanel's 5s tick so the two polls never fire on the
+    // same tick and stagger raw-fetch load across the 5s window.
+    let interval: ReturnType<typeof setInterval> | null = null
+    const kickoff = setTimeout(() => {
+      interval = setInterval(tick, 5000)
+      void tick()
+    }, 2500)
+
+    async function tick() {
       const room = useProjectStore.getState().rooms.find((r) => r.id === selectedRoomId)
       if (!room) return
       const fixtureVariantIds = [
@@ -128,8 +145,12 @@ export default function EditorPage() {
         }
         return { variants: next }
       })
-    }, 5000)
-    return () => clearInterval(interval)
+    }
+
+    return () => {
+      clearTimeout(kickoff)
+      if (interval) clearInterval(interval)
+    }
   }, [selectedRoomId])
 
   // Warn on browser tab close
