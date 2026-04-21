@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Boxes, Plus, LogOut, FolderOpen, ExternalLink, Shield } from 'lucide-react'
+import { Boxes, Plus, LogOut, FolderOpen, ExternalLink, Shield, RefreshCw, LayoutGrid } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -9,10 +9,18 @@ import NewProjectModal from '@/components/NewProjectModal'
 import LanguageToggle from '@/components/LanguageToggle'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useDelayedTrue } from '@/hooks/useDelayedTrue'
+import {
+  refreshProjectThumbnailFromDb,
+  getProjectThumbnailUrl,
+} from '@/lib/renderProjectThumbnail'
 import type { Project } from '@/types'
 
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const { t, i18n } = useTranslation()
+  const { showToast } = useUIStore()
+  const { loadProjects } = useProjectStore()
+  const [refreshing, setRefreshing] = useState(false)
+
   const statusColors: Record<string, string> = {
     draft: 'var(--color-text-secondary)',
     completed: 'var(--color-success)',
@@ -29,8 +37,50 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
     ? t('dashboard.status.completed')
     : t('dashboard.status.draft')
 
+  // updated_at drives cache-busting so a freshly-rendered image replaces
+  // the browser's cached copy immediately after refresh.
+  const thumbnailUrl = getProjectThumbnailUrl(project.thumbnail_path, project.updated_at)
+
+  const handleRefreshThumbnail = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      const { error, noRooms } = await refreshProjectThumbnailFromDb(project.id)
+      if (noRooms) {
+        showToast(t('dashboard.noRoomsYet'), 'warning')
+        return
+      }
+      if (error) {
+        showToast(t('dashboard.thumbnailFailed'), 'error')
+        return
+      }
+      showToast(t('dashboard.thumbnailRefreshed'), 'success')
+      await loadProjects()
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <div className="project-card">
+      <div className="project-thumb" onClick={onOpen}>
+        {thumbnailUrl ? (
+          <img src={thumbnailUrl} alt="" className="project-thumb-img" />
+        ) : (
+          <div className="project-thumb-placeholder">
+            <LayoutGrid size={36} strokeWidth={1.3} />
+          </div>
+        )}
+        <button
+          className="project-thumb-refresh"
+          onClick={handleRefreshThumbnail}
+          disabled={refreshing}
+          title={refreshing ? t('dashboard.refreshingThumbnail') : t('dashboard.refreshThumbnail')}
+        >
+          <RefreshCw size={13} className={refreshing ? 'spinning' : undefined} />
+        </button>
+      </div>
       <div className="project-card-body">
         <div className="project-card-top">
           <span
@@ -116,6 +166,7 @@ export default function DashboardPage() {
             <div className="projects-grid">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="project-card">
+                  <Skeleton width="100%" height={160} radius={0} style={{ borderTopLeftRadius: 10, borderTopRightRadius: 10 }} />
                   <div className="project-card-body">
                     <div className="project-card-top">
                       <Skeleton width={8} height={8} radius={4} />
@@ -387,6 +438,79 @@ export default function DashboardPage() {
         .project-card:hover {
           box-shadow: var(--shadow-md);
           border-color: var(--color-primary-brand);
+        }
+
+        .project-thumb {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 10;
+          background: var(--color-canvas-bg);
+          border-top-left-radius: 10px;
+          border-top-right-radius: 10px;
+          overflow: hidden;
+          cursor: pointer;
+          border-bottom: 1px solid var(--color-border-custom);
+        }
+
+        .project-thumb-img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .project-thumb-placeholder {
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--color-text-secondary);
+          opacity: 0.5;
+        }
+
+        .project-thumb-refresh {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          background: rgba(255, 255, 255, 0.92);
+          backdrop-filter: blur(6px);
+          border: 1px solid var(--color-border-custom);
+          color: var(--color-text-secondary);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.15s, color 0.15s, background 0.15s;
+          padding: 0;
+        }
+
+        .project-card:hover .project-thumb-refresh {
+          opacity: 1;
+        }
+
+        .project-thumb-refresh:hover:not(:disabled) {
+          color: var(--color-primary-brand);
+          background: white;
+        }
+
+        .project-thumb-refresh:disabled {
+          cursor: default;
+          opacity: 1;
+          color: var(--color-primary-brand);
+        }
+
+        .project-thumb-refresh .spinning {
+          animation: project-thumb-spin 0.8s linear infinite;
+        }
+
+        @keyframes project-thumb-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
         }
 
         .project-card-body {

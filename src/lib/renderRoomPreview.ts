@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { rawStorageDownload } from './supabase'
-import { getVertices, polygonCentroid } from './roomGeometry'
+import { getVertices, polygonCentroid, signedArea } from './roomGeometry'
 import type { Room, FinishMaterial, PlacedFurniture, FurnitureVariant, FurnitureItem, RoomDoor, RoomWindow } from '@/types'
 
 const PREVIEW_WIDTH = 1920
@@ -386,10 +386,18 @@ async function buildRoomScene(params: RenderParams): Promise<SceneBuildResult> {
   const EYE_HEIGHT = 1.6
   const WALL_OFFSET = 0.4
 
+  // The `(-dv, du) / len` rotation gives the *inward* normal only when
+  // the polygon is wound CCW in UV space. Shape edits and legacy data
+  // can flip the winding; in that case the same formula gives the
+  // OUTWARD normal and the camera ends up outside the room, with the
+  // selected wall blocking the view (walls are DoubleSide, so they
+  // still render from behind). Detect winding here and flip the sign.
+  const windingSign = signedArea(vertices) >= 0 ? 1 : -1
+
   const wallInwardNormal = (du: number, dv: number) => {
     const len = Math.sqrt(du * du + dv * dv)
     if (len < 0.001) return { nu: 0, nv: 0 }
-    return { nu: -dv / len, nv: du / len }
+    return { nu: (-dv / len) * windingSign, nv: (du / len) * windingSign }
   }
 
   const cameraWallIdx = (params.cameraWallIdx ?? 0) % vertices.length

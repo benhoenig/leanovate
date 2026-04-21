@@ -138,6 +138,24 @@ export function polygonCentroid(vertices: RoomVertex[]): RoomVertex {
   return { u: su / vertices.length, v: sv / vertices.length }
 }
 
+// ── Polygon winding ──────────────────────────────────────────────────────────
+
+/**
+ * Signed area via the shoelace formula. Positive = CCW (math convention,
+ * +v "up"), negative = CW. Used to defensively detect winding before
+ * computing inward/outward wall normals — shape edits or legacy data
+ * can leave a polygon wound the opposite of what the renderer assumes.
+ */
+export function signedArea(vertices: RoomVertex[]): number {
+  let sum = 0
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i]
+    const b = vertices[(i + 1) % vertices.length]
+    sum += a.u * b.v - b.u * a.v
+  }
+  return sum / 2
+}
+
 // ── Wall segment length ──────────────────────────────────────────────────────
 
 export function wallSegmentLength(a: RoomVertex, b: RoomVertex): number {

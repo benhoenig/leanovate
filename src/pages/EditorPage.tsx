@@ -13,6 +13,9 @@ import RoomCanvas from '@/components/editor/RoomCanvas'
 import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
 import ConstructionDrawingModal from '@/components/editor/ConstructionDrawingModal'
 import LanguageToggle from '@/components/LanguageToggle'
+import { saveProjectThumbnail } from '@/lib/renderProjectThumbnail'
+import { rawSelect } from '@/lib/supabase'
+import type { PlacedFurniture } from '@/types'
 
 export default function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -166,6 +169,65 @@ export default function EditorPage() {
     await saveProject()
     await useCanvasStore.getState().savePlacedFurniture()
     showToast(t('editor.projectSaved'), 'success')
+    void refreshThumbnailFromStores()
+  }
+
+  // Fire-and-forget thumbnail refresh. Pulls data from already-loaded
+  // stores where possible; falls back to a raw DB fetch for the primary
+  // room's placed furniture if the designer was editing a different
+  // room when they hit Save (avoids clobbering `canvasStore.placedFurniture`,
+  // which would flash the visible canvas).
+  //
+  // Primary room = first by sort_order (matches loadProject's order).
+  // Errors are swallowed — save itself has succeeded by this point and
+  // a thumbnail failure shouldn't surface as a save error to the designer.
+  const refreshThumbnailFromStores = async () => {
+    const project = useProjectStore.getState().currentProject
+    const allRooms = useProjectStore.getState().rooms
+    const finishMaterials = useProjectStore.getState().finishMaterials
+    if (!project || allRooms.length === 0) return
+
+    const primary = [...allRooms].sort((a, b) => a.sort_order - b.sort_order)[0]
+    const selectedId = useProjectStore.getState().selectedRoomId
+
+    let placedFurniture: PlacedFurniture[]
+    if (selectedId === primary.id) {
+      placedFurniture = useCanvasStore.getState().placedFurniture
+    } else {
+      const { data, error } = await rawSelect<PlacedFurniture>(
+        'placed_furniture',
+        `room_id=eq.${primary.id}`,
+      )
+      if (error) {
+        console.warn('[projectThumbnail] primary room fetch failed:', error)
+        return
+      }
+      placedFurniture = data ?? []
+    }
+
+    const catalog = useCatalogStore.getState()
+    const items: Record<string, typeof catalog.items[number]> = {}
+    for (const it of catalog.items) items[it.id] = it
+
+    try {
+      const { error } = await saveProjectThumbnail(project.id, {
+        room: primary,
+        finishMaterials,
+        placedFurniture,
+        variants: catalog.variants,
+        items,
+      })
+      if (error) {
+        console.warn('[projectThumbnail] refresh failed:', error)
+        return
+      }
+      // Don't reload projects from here — CatalogPanel polling could
+      // collide with the client read. DashboardPage refetches on mount
+      // anyway (useEffect → loadProjects), so the new thumbnail shows
+      // the next time the designer visits the dashboard.
+    } catch (err) {
+      console.warn('[projectThumbnail] refresh threw:', err)
+    }
   }
 
   const handleBack = () => {
