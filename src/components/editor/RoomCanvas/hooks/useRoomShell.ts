@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { addStandardLighting, buildRoomShell, disposeSceneObjects } from '@/lib/roomScene'
+import { buildRoomShell, disposeSceneObjects } from '@/lib/roomScene'
 import { getVertices, polygonCentroid } from '@/lib/roomGeometry'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -76,7 +76,6 @@ export function useRoomShell(
         return undefined
       },
     })
-    addStandardLighting(shellGroup, room)
     ceilingMeshRef.current = shell.ceilingMesh
 
     // Only frame the camera when switching to a different room — preserve pose

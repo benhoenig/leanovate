@@ -20,6 +20,8 @@ export type ProjectStatus = 'draft' | 'completed'
 export type FinishType = 'wall' | 'floor' | 'lighting'
 export type CurtainStyle = 'none' | 'open' | 'closed'
 export type MountType = 'floor' | 'wall'
+export type FlatOrientation = 'horizontal' | 'vertical'
+export type ArtScope = 'private' | 'team'
 
 // --- Auth & Team ---
 
@@ -48,10 +50,28 @@ export interface Project {
   updated_at: string
 }
 
+export type LightingPreset = 'warm' | 'neutral' | 'cool' | 'custom'
+
+/**
+ * Ceiling-light settings stored per room (JSONB, no column migration needed).
+ * `material_id` picks the fixture style (see `finish_materials` WHERE type='lighting').
+ * Presets set temperature + intensity; moving a slider flips `preset` to 'custom'
+ * but keeps the values. `enabled=false` is "Off" — light is skipped at render time
+ * but settings are preserved so toggling back restores the last state.
+ */
+export interface RoomLightingFinish {
+  material_id: string | null
+  custom_url: string | null
+  enabled: boolean
+  preset: LightingPreset
+  temperature_k: number   // 2200–6500
+  intensity: number       // 0–1
+}
+
 export interface RoomFinishes {
   wall?: { material_id: string | null; custom_url: string | null }
   floor?: { material_id: string | null; custom_url: string | null }
-  lighting?: { material_id: string | null; custom_url: string | null }
+  lighting?: RoomLightingFinish
 }
 
 // --- Room Geometry (polygon vertices + doors/windows on walls) ---
@@ -122,6 +142,10 @@ export interface FurnitureCategory {
   default_block_size: BlockSize
   /** 'floor' = normal furniture (X/Z grid placement); 'wall' = door/window (wall-attached). */
   mount_type: MountType
+  /** 'horizontal' = rug-style plane on floor; 'vertical' = upright plane (picture frame). Only meaningful when is_flat=true. */
+  flat_orientation: FlatOrientation
+  /** True when items in this category are picture-frame style (designer picks art to fill the mat opening). */
+  accepts_art: boolean
 }
 
 export interface Style {
@@ -144,6 +168,8 @@ export interface FurnitureItem {
   status: ItemStatus
   is_flat_override: boolean | null
   block_size_override: BlockSize | null
+  /** Inner mat rectangle in cm for frame-style items. Required when the item's category has accepts_art=true. */
+  mat_opening_cm: { w: number; h: number } | null
   submitted_by: string
   reviewed_by: string | null
   reviewed_at: string | null
@@ -194,7 +220,24 @@ export interface PlacedFurniture {
   price_at_placement: number | null
   scale_factor: number
   sort_order: number
+  /** Art image to render inside the frame's mat opening. Null = empty frame. Only meaningful when the furniture_item is a picture frame (category.accepts_art). */
+  art_id: string | null
   created_at: string
+}
+
+// --- Art Library ---
+
+export interface ArtImage {
+  id: string
+  uploaded_by: string
+  name: string
+  /** Path within the `frame-art` storage bucket. Resolve to a public URL via getPublicStorageUrl. */
+  image_path: string
+  /** width / height, used to filter art that fits a given frame's mat opening. */
+  aspect_ratio: number
+  scope: ArtScope
+  created_at: string
+  updated_at: string
 }
 
 // --- Finish Materials ---

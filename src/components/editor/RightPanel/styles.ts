@@ -260,6 +260,57 @@ export const panelStyle = `
   .fp-action-btn--danger:hover {
     background: rgba(229, 77, 66, 0.08);
   }
+  .fp-action-btn--ghost {
+    background: transparent;
+    color: var(--color-text-secondary);
+  }
+
+  /* Artwork (picture frame) panel */
+  .fp-art-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 6px;
+    background: var(--color-card-bg);
+    border: 1px solid var(--color-border-custom);
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .fp-art-thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+  }
+  .fp-art-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .fp-art-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fp-art-sub {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+  }
+  .fp-art-empty {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    font-style: italic;
+    padding: 6px 0;
+  }
+  .fp-art-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
 
   /* Fixture controls */
   .fixture-row {
@@ -437,5 +488,65 @@ export const panelStyle = `
   .curtain-swatch.selected {
     border-color: var(--color-primary-brand);
     box-shadow: 0 0 0 1.5px var(--color-primary-brand);
+  }
+
+  /* Lighting controls — preset row reuses .curtain-style-btn (same segmented
+     look, same active primary-brand fill). Studio toggle reuses .shape-edit-btn.
+     Sliders mirror .fp-scale-slider's rail + thumb for consistency. */
+  .lighting-preset-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .lighting-slider {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .lighting-slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+  .lighting-slider-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-primary);
+  }
+  .lighting-slider-range {
+    width: 100%;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--color-border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    margin: 0;
+  }
+  .lighting-slider-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-primary-brand);
+    cursor: pointer;
+    border: none;
+  }
+  .lighting-slider-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-primary-brand);
+    cursor: pointer;
+    border: none;
+  }
+  .lighting-slider-range:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .lighting-slider-range:disabled::-webkit-slider-thumb {
+    cursor: not-allowed;
   }
 `

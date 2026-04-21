@@ -6,6 +6,7 @@ type RightPanelTab = 'properties' | 'cost'
 export type CameraMode = 'design' | 'roam'
 
 const CANVAS_GRID_LS_KEY = 'leanovate.canvasGrid'
+const STUDIO_LIGHTS_LS_KEY = 'leanovate.studioLights'
 
 function readInitialGrid(): boolean {
   try {
@@ -13,6 +14,17 @@ function readInitialGrid(): boolean {
     return stored === 'true'
   } catch {
     return false
+  }
+}
+
+function readInitialStudioLights(): boolean {
+  // Default on: new designers need the studio fill to see anything before
+  // placing real fixtures. Once they're building real lighting, they flip it off.
+  try {
+    const stored = localStorage.getItem(STUDIO_LIGHTS_LS_KEY)
+    return stored === null ? true : stored === 'true'
+  } catch {
+    return true
   }
 }
 
@@ -33,6 +45,12 @@ interface UIState {
   // Canvas grid visibility (toggleable, persisted to localStorage)
   canvasGrid: boolean
   setCanvasGrid: (on: boolean) => void
+
+  // Studio lighting rig (ambient + sun + fill). Helps new rooms read before
+  // the designer places real fixtures; typically flipped off once real
+  // ceiling/lamp lights are configured. Persisted to localStorage.
+  studioLights: boolean
+  setStudioLights: (on: boolean) => void
 
   // Camera mode: design (orbit) vs roam (first-person walkthrough)
   cameraMode: CameraMode
@@ -64,6 +82,12 @@ export const useUIStore = create<UIState>((set) => ({
   setCanvasGrid: (on) => {
     set({ canvasGrid: on })
     try { localStorage.setItem(CANVAS_GRID_LS_KEY, String(on)) } catch { /* ignore quota errors */ }
+  },
+
+  studioLights: readInitialStudioLights(),
+  setStudioLights: (on) => {
+    set({ studioLights: on })
+    try { localStorage.setItem(STUDIO_LIGHTS_LS_KEY, String(on)) } catch { /* ignore quota errors */ }
   },
 
   // Session-local — no need to persist across tabs. Always starts in design.

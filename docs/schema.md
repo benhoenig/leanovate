@@ -59,6 +59,14 @@ CREATE TYPE project_status AS ENUM ('draft', 'completed');
 
 -- Finish material types
 CREATE TYPE finish_type AS ENUM ('wall', 'floor', 'door', 'window', 'lighting');
+
+-- Orientation of a flat-item plane. 'horizontal' = rug-style on the floor,
+-- 'vertical' = upright plane (picture frames, wall art).
+CREATE TYPE flat_orientation AS ENUM ('horizontal', 'vertical');
+
+-- Visibility scope for designer-uploaded art images used inside picture frames.
+-- 'private' = only the uploader, 'team' = everyone on the team.
+CREATE TYPE art_scope AS ENUM ('private', 'team');
 ```
 
 ---
@@ -116,7 +124,7 @@ Individual rooms within a project's unit.
 | width_cm | integer | NOT NULL | Room width |
 | height_cm | integer | NOT NULL | Room depth |
 | geometry | jsonb | NOT NULL, default '{}' | Wall segments, door positions, window positions. Consumed by PixiJS canvas as one object. Structure: `{ "walls": [...], "doors": [...], "windows": [...] }` |
-| finishes | jsonb | NOT NULL, default '{}' | Current finish selections. Structure: `{ "wall": { "material_id": "uuid", "custom_url": null }, "floor": { ... }, "door": { ... }, "window": { ... }, "lighting": { ... } }` |
+| finishes | jsonb | NOT NULL, default '{}' | Current finish selections. Wall + floor entries: `{ "material_id": "uuid", "custom_url": null }`. Lighting entry (ceiling fixture): `{ "material_id": "uuid\|null", "custom_url": null, "enabled": boolean, "preset": "warm\|neutral\|cool\|custom", "temperature_k": int 2200–6500, "intensity": float 0–1 }` — `material_id` picks the fixture style, the other four knobs drive the SpotLight. Moving a slider flips `preset` to `"custom"` but keeps the values. `resolveLightingSettings()` fills in missing fields for rows written before the richer shape. Door/window entries are no longer written — those are placed fixtures. |
 | sort_order | integer | NOT NULL, default 0 | Display order in the room list |
 | preview_image_url | text | nullable | Most recently saved eye-level interior vignette (3D perspective preview). Stored in `thumbnails` bucket. Updated each time designer renders a preview and clicks "Save to Project". Null until first save. |
 | created_at | timestamptz | NOT NULL, default now() | |
@@ -137,8 +145,10 @@ Top-level groupings for the furniture catalog.
 | name | text | NOT NULL, UNIQUE | e.g. "Sofa", "Bed", "Dining Table", "TV Stand", "Lamp", "Wardrobe" |
 | icon | text | nullable | Icon identifier for UI display |
 | sort_order | integer | NOT NULL, default 0 | Display order in catalog browser |
-| is_flat | boolean | NOT NULL, default false | If true, items in this category skip TRELLIS entirely — the first uploaded image is used directly as the canvas asset. Seeded true for `Rug`. |
-| default_block_size | block_size | NOT NULL, default 'big' | Grid size for furniture placement snap. Seeded Small for Chair, Lamp, Side Table, Coffee Table; Big for everything else. See `src/lib/blockGrid.ts`. |
+| is_flat | boolean | NOT NULL, default false | If true, items in this category skip TRELLIS entirely — the first uploaded image is used directly as the canvas asset. Seeded true for `Rug`, `Picture Frame`. |
+| default_block_size | block_size | NOT NULL, default 'big' | Grid size for furniture placement snap. Seeded Small for Chair, Lamp, Side Table, Coffee Table, Picture Frame; Big for everything else. See `src/lib/blockGrid.ts`. |
+| flat_orientation | flat_orientation | NOT NULL, default 'horizontal' | Only read when `is_flat=true`. 'horizontal' = rug-style plane laid on the floor. 'vertical' = upright plane (picture frames, wall art). Seeded 'vertical' for `Picture Frame`. |
+| accepts_art | boolean | NOT NULL, default false | If true, items in this category are picture-frame style — the designer picks art from the art library to fill the mat opening. Seeded true for `Picture Frame`. |
 
 #### styles
 
@@ -168,6 +178,7 @@ The parent product record. Holds shared details — no color-specific data. Each
 | status | item_status | NOT NULL, default 'draft' | draft = personal only, pending = submitted for review, approved = in shared catalog, rejected = admin declined |
 | is_flat_override | boolean | nullable | Per-item override of `category.is_flat`. Null = inherit from category. Lets designers flag a thin/flat item (e.g. a thin headboard) that falls in a non-flat category. |
 | block_size_override | block_size | nullable | Per-item override of `category.default_block_size`. Null = inherit. |
+| mat_opening_cm | jsonb | nullable | Inner mat rectangle (visible art area) for picture-frame items. Shape: `{ "w": number, "h": number }` in cm. Required at the application layer when the item's category has `accepts_art=true` (enforced in `AddFurnitureModal`). Null for non-frame items. |
 | submitted_by | uuid | FK → profiles.id, NOT NULL | Designer who added this item |
 | reviewed_by | uuid | FK → profiles.id, nullable | Admin who approved/rejected |
 | reviewed_at | timestamptz | nullable | When the review happened |
@@ -246,6 +257,7 @@ Instances of furniture items placed in a room. Coordinates are room-local cm.
 | price_at_placement | decimal | nullable | The variant's price when placed. Compared against live price to trigger staleness alerts |
 | scale_factor | float | NOT NULL, default 1 | Per-instance size multiplier applied on top of variant dimensions |
 | sort_order | integer | NOT NULL, default 0 | Not used by the 3D canvas (retained for backwards compat) |
+| art_id | uuid | FK → art_library.id ON DELETE SET NULL, nullable | Art image rendered inside the frame's mat. Only meaningful for picture-frame items (category.accepts_art = true). Null = empty frame (shows just the frame product photo with the grey/white mat visible). On art deletion the frame silently reverts to empty instead of orphaning the reference. |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `room_id`, `furniture_item_id`
@@ -271,6 +283,31 @@ Preset palette of wall colors, floor materials, door styles, window styles, and 
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `type`, `is_custom`
+
+---
+
+### Art Library
+
+#### art_library
+
+Designer-uploaded images used as the art inside picture-frame items. Each row is either private to the uploader or shared team-wide (opt-in via the designer, no admin approval). Referenced from `placed_furniture.art_id`.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| id | uuid | PK, default gen_random_uuid() | |
+| uploaded_by | uuid | FK → profiles.id ON DELETE CASCADE, NOT NULL | Designer who uploaded the image |
+| name | text | NOT NULL | Designer-friendly label. Defaults to the filename (minus extension) on upload |
+| image_path | text | NOT NULL | Path within the `frame-art` storage bucket (e.g. `{uploader_id}/{uuid}.jpg`) |
+| aspect_ratio | float | NOT NULL | width / height, measured at upload time from the decoded image. Used by the frame picker to filter art that fits a given mat opening (±10% tolerance) |
+| scope | art_scope | NOT NULL, default 'private' | 'private' = only the uploader sees it in their picker. 'team' = visible to everyone. The designer flips this freely; there is no admin approval gate for v1 |
+| created_at | timestamptz | NOT NULL, default now() | |
+| updated_at | timestamptz | NOT NULL, default now() | Auto-updated via trigger |
+
+**Indexes:** `uploaded_by`, `scope`
+
+**RLS:** Users SELECT rows where `scope='team' OR uploaded_by=auth.uid() OR is_admin()`. INSERT requires `uploaded_by=auth.uid()`. UPDATE/DELETE only for own art (or admin). See `supabase/migrations/20260427000000_picture_frames_and_art.sql`.
+
+**Storage:** Images live in the `frame-art` bucket (public read + authenticated INSERT/DELETE, same pattern as the `thumbnails` bucket after `20260422000000_variant_thumbnails.sql`). Private art relies on DB-level RLS for access control — the bucket paths use UUIDs so they aren't easily guessable.
 
 ---
 

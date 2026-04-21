@@ -19,6 +19,8 @@ export interface CreateItemInput {
   depth_cm?: number
   height_cm?: number
   is_flat_override?: boolean | null
+  /** Inner mat rectangle in cm — required when the target category has accepts_art=true. */
+  mat_opening_cm?: { w: number; h: number } | null
 }
 
 export interface CreateVariantInput {
@@ -58,7 +60,7 @@ export interface ItemsSlice {
   createItem: (data: CreateItemInput) => Promise<{ id: string | null; error: string | null }>
   updateItem: (
     id: string,
-    updates: Partial<Pick<FurnitureItem, 'name' | 'description' | 'category_id' | 'width_cm' | 'depth_cm' | 'height_cm' | 'source_url' | 'is_flat_override' | 'block_size_override'>>
+    updates: Partial<Pick<FurnitureItem, 'name' | 'description' | 'category_id' | 'width_cm' | 'depth_cm' | 'height_cm' | 'source_url' | 'is_flat_override' | 'block_size_override' | 'mat_opening_cm'>>
   ) => Promise<void>
   setItemStyles: (itemId: string, styleIds: string[]) => Promise<void>
 

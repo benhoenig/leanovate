@@ -54,6 +54,8 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
   const [widthCm, setWidthCm] = useState('')
   const [depthCm, setDepthCm] = useState('')
   const [heightCm, setHeightCm] = useState('')
+  const [matOpeningWCm, setMatOpeningWCm] = useState('')
+  const [matOpeningHCm, setMatOpeningHCm] = useState('')
   const [isSavingItem, setIsSavingItem] = useState(false)
   const [createdItemId, setCreatedItemId] = useState<string | null>(null)
 
@@ -192,6 +194,30 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
 
   const handleStep1Submit = async () => {
     if (!name.trim() || !categoryId) return
+    const category = categories.find((c) => c.id === categoryId)
+    // Frame-style items need a mat opening — refuse to save without one
+    // so the art overlay renders in the correct spot. Must fit within the
+    // frame's outer dimensions.
+    let matOpening: { w: number; h: number } | null = null
+    if (category?.accepts_art) {
+      const mw = Number(matOpeningWCm)
+      const mh = Number(matOpeningHCm)
+      if (!mw || !mh || mw <= 0 || mh <= 0) {
+        showToast(t('addFurniture.errorMatOpeningRequired', { defaultValue: 'Mat opening width + height are required for picture frames.' }), 'warning')
+        return
+      }
+      const outerW = Number(widthCm)
+      const outerH = Number(heightCm)
+      if (outerW && mw > outerW) {
+        showToast(t('addFurniture.errorMatOpeningTooWide', { defaultValue: 'Mat opening width exceeds the frame width.' }), 'warning')
+        return
+      }
+      if (outerH && mh > outerH) {
+        showToast(t('addFurniture.errorMatOpeningTooTall', { defaultValue: 'Mat opening height exceeds the frame height.' }), 'warning')
+        return
+      }
+      matOpening = { w: mw, h: mh }
+    }
     setIsSavingItem(true)
     try {
       const domain = url.trim() ? extractDomain(url) : 'manual'
@@ -205,6 +231,7 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
         width_cm: widthCm ? Number(widthCm) : undefined,
         depth_cm: depthCm ? Number(depthCm) : undefined,
         height_cm: heightCm ? Number(heightCm) : undefined,
+        mat_opening_cm: matOpening,
       })
       console.log('[AddFurniture] createItem result:', { id, error })
       if (error || !id) {
@@ -369,6 +396,11 @@ export default function AddFurnitureModal({ onClose, mountTypeFilter = 'floor' }
             setDepthCm={setDepthCm}
             heightCm={heightCm}
             setHeightCm={setHeightCm}
+            acceptsArt={selectedCategory?.accepts_art === true}
+            matOpeningWCm={matOpeningWCm}
+            setMatOpeningWCm={setMatOpeningWCm}
+            matOpeningHCm={matOpeningHCm}
+            setMatOpeningHCm={setMatOpeningHCm}
             selectedStyles={selectedStyles}
             toggleStyle={toggleStyle}
             isSavingItem={isSavingItem}

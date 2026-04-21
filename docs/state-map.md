@@ -43,7 +43,7 @@ Owns all three template layers: unit layout templates, furniture layout template
 
 ### 6. UI Store (`useUIStore`)
 
-Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, toast notifications, **world-grid visibility** (persisted to localStorage), and **camera mode** (`design` | `roam`, session-local). No business logic, no data persistence beyond the grid toggle.
+Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, toast notifications, **world-grid visibility** (persisted to localStorage), **camera mode** (`design` | `roam`, session-local), and **studio lights** (design-fill rig on/off, persisted to localStorage — defaults on; designers flip off once real ceiling/lamp fixtures are configured). No business logic, no data persistence beyond the grid + studio-lights toggles.
 
 ---
 

@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { DoorOpen, PanelTop, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
-import type { RoomGeometry } from '@/types'
+import type { Room, RoomGeometry } from '@/types'
 import { migrateFixtureWallIndex } from '@/lib/roomGeometry'
 import FixtureProperties from './FixtureProperties'
+import LightingControls from './LightingControls'
 
 export default function RoomProperties({ room, updateRoom, t }: {
-  room: { id: string; name: string; width_cm: number; height_cm: number; ceiling_height_cm: number; geometry: RoomGeometry }
+  room: Room
   updateRoom: (id: string, updates: Record<string, unknown>) => Promise<void>
   t: TFunction
 }) {
@@ -84,6 +85,8 @@ export default function RoomProperties({ room, updateRoom, t }: {
           </button>
         )}
       </div>
+
+      <LightingControls room={room} updateRoom={updateRoom} />
 
       {((geo.doors?.length ?? 0) > 0 || (geo.windows?.length ?? 0) > 0 || fixturePlacementType) && (
         <>

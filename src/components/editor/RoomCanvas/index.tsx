@@ -6,7 +6,8 @@
  * work. See `./hooks/` for each concern:
  *
  *   - useThreeScene         renderer, camera, OrbitControls, render loop
- *   - useRoomShell          floor/walls/ceiling/lights (rebuilt per change)
+ *   - useRoomShell          floor/walls/ceiling (rebuilt per change)
+ *   - useRoomLighting       studio rig + ceiling fixture (persistent, mutable)
  *   - useFurnitureLayer     placed furniture ↔ scene graph sync
  *   - useSelectionRing      selection ring + per-frame follow
  *   - usePlacementGhosts    furniture + fixture placement ghosts
@@ -21,6 +22,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import type { Room, FinishMaterial } from '@/types'
 import { useThreeScene } from './hooks/useThreeScene'
 import { useRoomShell } from './hooks/useRoomShell'
+import { useRoomLighting } from './hooks/useRoomLighting'
 import { useFurnitureLayer } from './hooks/useFurnitureLayer'
 import { useSelectionRing } from './hooks/useSelectionRing'
 import { usePlacementGhosts } from './hooks/usePlacementGhosts'
@@ -39,6 +41,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
 
   const ctx = useThreeScene(room)
   useRoomShell(ctx, room, finishMaterials)
+  useRoomLighting(ctx, room, finishMaterials)
   useFurnitureLayer(ctx)
   useSelectionRing(ctx)
   const ghostRefs = usePlacementGhosts(ctx, room.id)

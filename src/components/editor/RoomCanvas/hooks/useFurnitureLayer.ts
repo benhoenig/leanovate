@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { createFurnitureGroup } from '@/lib/roomScene'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useArtStore } from '@/stores/useArtStore'
 import type { FurnitureItem, FurnitureVariant, PlacedFurniture } from '@/types'
 import type { SceneContext } from '../types'
 
@@ -23,13 +24,24 @@ export function useFurnitureLayer(ctx: SceneContext): void {
       syncFurniture()
     })
     const unsubCatalog = useCatalogStore.subscribe((state, prev) => {
-      if (state.items === prev.items && state.variants === prev.variants) return
+      if (state.items === prev.items && state.variants === prev.variants && state.categories === prev.categories) return
       syncFurniture()
     })
+    // Art swaps on placed frames need a rebuild so the overlay plane swaps
+    // texture. Picture-frame items are rare in practice, so re-rendering
+    // every other placed item on any art change is an acceptable cost.
+    const unsubArt = useArtStore.subscribe((state, prev) => {
+      if (state.art === prev.art) return
+      syncFurniture()
+    })
+    // Lazy-load the art library once when the layer mounts so placed frames
+    // can resolve their image URLs. Safe to call repeatedly.
+    void useArtStore.getState().loadArt()
     syncFurniture()
     return () => {
       unsubCanvas()
       unsubCatalog()
+      unsubArt()
     }
 
     function signature(
@@ -37,12 +49,14 @@ export function useFurnitureLayer(ctx: SceneContext): void {
       variant: FurnitureVariant,
       item: FurnitureItem,
       isFlat: boolean,
+      flatOrientation: 'horizontal' | 'vertical',
+      artUrl: string | null,
     ): string {
       const w = variant.width_cm ?? item.width_cm ?? 50
       const d = variant.depth_cm ?? item.depth_cm ?? 50
       const h = variant.height_cm ?? item.height_cm ?? 50
-      const glb = isFlat ? 'flat' : variant.glb_path ?? 'placeholder'
-      return `${pf.selected_variant_id}|${w}|${d}|${h}|${glb}|${pf.scale_factor ?? 1}`
+      const glb = isFlat ? `flat:${flatOrientation}` : variant.glb_path ?? 'placeholder'
+      return `${pf.selected_variant_id}|${w}|${d}|${h}|${glb}|${pf.scale_factor ?? 1}|${artUrl ?? 'no-art'}`
     }
 
     function disposeGroup(group: THREE.Group) {
@@ -65,6 +79,7 @@ export function useFurnitureLayer(ctx: SceneContext): void {
       const existing = ctx.furnitureGroupsRef.current
       const signatures = ctx.furnitureSignaturesRef.current
 
+      const art = useArtStore.getState()
       const seen = new Set<string>()
       for (const pf of canvas.placedFurniture) {
         seen.add(pf.id)
@@ -74,7 +89,12 @@ export function useFurnitureLayer(ctx: SceneContext): void {
         if (!variant || !item) continue
 
         const isFlat = catalog.isItemFlat(item.id)
-        const sig = signature(pf, variant, item, isFlat)
+        const category = catalog.categories.find((c) => c.id === item.category_id)
+        const flatOrientation = category?.flat_orientation ?? 'horizontal'
+        const artRow = art.getArtById(pf.art_id)
+        const artUrl = artRow ? art.getArtUrl(artRow) : null
+
+        const sig = signature(pf, variant, item, isFlat, flatOrientation, artUrl)
         const currentGroup = existing.get(pf.id)
         const currentSig = signatures.get(pf.id)
 
@@ -90,7 +110,15 @@ export function useFurnitureLayer(ctx: SceneContext): void {
           layer.remove(currentGroup)
           disposeGroup(currentGroup)
         }
-        const { group, loader } = createFurnitureGroup({ placed: pf, variant, item, isFlat })
+        const { group, loader } = createFurnitureGroup({
+          placed: pf,
+          variant,
+          item,
+          isFlat,
+          flatOrientation,
+          artUrl,
+          matOpeningCm: item.mat_opening_cm,
+        })
         layer.add(group)
         existing.set(pf.id, group)
         signatures.set(pf.id, sig)

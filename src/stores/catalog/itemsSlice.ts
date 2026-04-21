@@ -63,6 +63,7 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
       depth_cm: data.depth_cm ?? null,
       height_cm: data.height_cm ?? null,
       is_flat_override: data.is_flat_override ?? null,
+      mat_opening_cm: data.mat_opening_cm ?? null,
       status: 'draft',
       submitted_by: profile.id,
     })

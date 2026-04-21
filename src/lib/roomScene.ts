@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getVertices, polygonCentroid } from './roomGeometry'
 import { rawStorageDownload } from './supabase'
-import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture, CurtainStyle } from '@/types'
+import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture, CurtainStyle, FlatOrientation, RoomLightingFinish, LightingPreset } from '@/types'
 
 // ── Finish color resolution ──────────────────────────────────────────────────
 
@@ -662,19 +662,76 @@ export function buildCurtain(args: {
 
 // ── Lighting ─────────────────────────────────────────────────────────────────
 
-export interface LightingRefs {
-  ambient: THREE.AmbientLight
-  sun: THREE.DirectionalLight
-  fill: THREE.DirectionalLight
-  point: THREE.PointLight
+/**
+ * Default lighting settings for rooms where `finishes.lighting` is absent or
+ * was written before the richer shape existed. `resolveLightingSettings`
+ * fills in whichever fields are missing.
+ */
+export const DEFAULT_LIGHTING: RoomLightingFinish = {
+  material_id: null,
+  custom_url: null,
+  enabled: true,
+  preset: 'warm',
+  temperature_k: 2700,
+  intensity: 0.7,
+}
+
+/** Preset → (temperature_k, intensity). Slider drag flips preset → 'custom'. */
+export const LIGHTING_PRESETS: Record<Exclude<LightingPreset, 'custom'>, { temperature_k: number; intensity: number }> = {
+  warm:    { temperature_k: 2700, intensity: 0.7 },
+  neutral: { temperature_k: 3500, intensity: 0.8 },
+  cool:    { temperature_k: 5000, intensity: 0.9 },
+}
+
+/** Fill missing fields on a room's lighting finish with defaults. */
+export function resolveLightingSettings(
+  finish: Partial<RoomLightingFinish> | null | undefined,
+): RoomLightingFinish {
+  if (!finish) return { ...DEFAULT_LIGHTING }
+  return {
+    material_id:   finish.material_id   ?? null,
+    custom_url:    finish.custom_url    ?? null,
+    enabled:       finish.enabled       ?? DEFAULT_LIGHTING.enabled,
+    preset:        finish.preset        ?? DEFAULT_LIGHTING.preset,
+    temperature_k: finish.temperature_k ?? DEFAULT_LIGHTING.temperature_k,
+    intensity:     finish.intensity     ?? DEFAULT_LIGHTING.intensity,
+  }
 }
 
 /**
- * Adds a standard 4-light setup tuned for the room's centroid + ceiling height.
- * Same lighting profile as renderRoomPreview's "fast" mode for visual parity
- * between the live canvas and the saved preview.
+ * Kelvin → sRGB approximation (Tanner Helland). Valid roughly 1000–40000K.
+ * Returns a normalized THREE.Color.
  */
-export function addStandardLighting(scene: THREE.Object3D, room: Room): LightingRefs {
+export function kelvinToRgb(kelvin: number): THREE.Color {
+  const k = Math.max(1000, Math.min(40000, kelvin)) / 100
+  let r: number, g: number, b: number
+  if (k <= 66) {
+    r = 255
+    g = 99.4708025861 * Math.log(k) - 161.1195681661
+    b = k <= 19 ? 0 : 138.5177312231 * Math.log(k - 10) - 305.0447927307
+  } else {
+    r = 329.698727446 * Math.pow(k - 60, -0.1332047592)
+    g = 288.1221695283 * Math.pow(k - 60, -0.0755148492)
+    b = 255
+  }
+  const n = (x: number) => Math.max(0, Math.min(255, x)) / 255
+  return new THREE.Color(n(r), n(g), n(b))
+}
+
+// ── Studio lighting rig ──────────────────────────────────────────────────────
+
+export interface StudioLightingRefs {
+  ambient: THREE.AmbientLight
+  sun: THREE.DirectionalLight
+  fill: THREE.DirectionalLight
+}
+
+/**
+ * Three-light studio fill rig (ambient + warm directional sun + cool directional fill).
+ * Helps new rooms read before the designer places real fixtures. Toggleable
+ * via `setStudioLightsEnabled` without rebuild.
+ */
+export function addStudioLights(scene: THREE.Object3D, room: Room): StudioLightingRefs {
   const vertices = getVertices(room)
   const centroid = polygonCentroid(vertices)
   const ceilingH = (room.ceiling_height_cm ?? 260) / 100
@@ -691,11 +748,175 @@ export function addStandardLighting(scene: THREE.Object3D, room: Room): Lighting
   fill.position.set(centroid.u - 2, ceilingH, centroid.v - 2)
   scene.add(fill)
 
-  const point = new THREE.PointLight(0xffeedd, 0.4, 20)
-  point.position.set(centroid.u, ceilingH - 0.1, centroid.v)
-  scene.add(point)
+  return { ambient, sun, fill }
+}
 
-  return { ambient, sun, fill, point }
+export function setStudioLightsEnabled(refs: StudioLightingRefs, on: boolean): void {
+  refs.ambient.visible = on
+  refs.sun.visible = on
+  refs.fill.visible = on
+}
+
+// ── Ceiling fixture ──────────────────────────────────────────────────────────
+
+export interface CeilingFixtureRefs {
+  /** Group positioned at room centroid at ceiling height. */
+  group: THREE.Group
+  spot: THREE.SpotLight
+  target: THREE.Object3D
+  /** Visible luminaire mesh — mutable via `rebuildFixtureMesh` when style changes. */
+  mesh: THREE.Object3D
+}
+
+type FixtureKind = 'recessed' | 'pendant'
+
+/**
+ * Picks the fixture shape from the selected lighting material's thumbnail
+ * filename convention: `/textures/lighting/{kind}.png`. Unknown → recessed.
+ */
+function fixtureKindFromMaterial(
+  materialId: string | null,
+  finishMaterials: FinishMaterial[],
+): FixtureKind {
+  if (!materialId) return 'recessed'
+  const mat = finishMaterials.find((m) => m.id === materialId)
+  if (!mat) return 'recessed'
+  const path = mat.thumbnail_path.toLowerCase()
+  if (path.includes('pendant')) return 'pendant'
+  return 'recessed'
+}
+
+function buildFixtureMesh(kind: FixtureKind): THREE.Group {
+  const g = new THREE.Group()
+  g.name = `ceiling-fixture-${kind}`
+  if (kind === 'pendant') {
+    // Thin cord drops 30cm from ceiling, globe bulb hangs below.
+    const cord = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.008, 0.008, 0.3, 8),
+      new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 }),
+    )
+    cord.position.y = -0.15
+    g.add(cord)
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 24, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff5e0,
+        emissive: 0xfff5e0,
+        emissiveIntensity: 0.6,
+        roughness: 0.3,
+      }),
+    )
+    bulb.position.y = -0.38
+    g.add(bulb)
+  } else {
+    // Recessed: flush disc + emissive lens.
+    const ring = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.02, 24),
+      new THREE.MeshStandardMaterial({ color: 0xefefef, roughness: 0.4, metalness: 0.2 }),
+    )
+    ring.position.y = -0.01
+    g.add(ring)
+    const lens = new THREE.Mesh(
+      new THREE.CircleGeometry(0.08, 24),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff5e0,
+        emissive: 0xfff5e0,
+        emissiveIntensity: 0.8,
+        side: THREE.DoubleSide,
+      }),
+    )
+    lens.rotation.x = Math.PI / 2
+    lens.position.y = -0.021
+    g.add(lens)
+  }
+  return g
+}
+
+/**
+ * Adds a visible ceiling luminaire + SpotLight at room centroid. Mutable in
+ * place via `applyCeilingFixtureSettings` (fast — safe on every slider tick)
+ * and `rebuildFixtureMesh` (when the fixture style changes).
+ */
+export function addCeilingFixture(
+  scene: THREE.Object3D,
+  room: Room,
+  settings: RoomLightingFinish,
+  finishMaterials: FinishMaterial[],
+): CeilingFixtureRefs {
+  const vertices = getVertices(room)
+  const centroid = polygonCentroid(vertices)
+  const ceilingH = (room.ceiling_height_cm ?? 260) / 100
+
+  const group = new THREE.Group()
+  group.name = 'ceiling-fixture'
+  group.position.set(centroid.u, ceilingH, centroid.v)
+  scene.add(group)
+
+  const mesh = buildFixtureMesh(fixtureKindFromMaterial(settings.material_id, finishMaterials))
+  group.add(mesh)
+
+  // SpotLight points straight down. Positioned just below the luminaire to
+  // avoid self-shadowing the fixture mesh.
+  const spot = new THREE.SpotLight(0xffffff, 0, 0, Math.PI / 3, 0.5, 1.2)
+  spot.position.set(0, -0.05, 0)
+  spot.castShadow = false  // shadows from SpotLights are expensive; skip for MVP
+  const target = new THREE.Object3D()
+  target.position.set(0, -1, 0)
+  group.add(target)
+  group.add(spot)
+  spot.target = target
+
+  const refs: CeilingFixtureRefs = { group, spot, target, mesh }
+  applyCeilingFixtureSettings(refs, settings)
+  return refs
+}
+
+/**
+ * Applies color temperature + intensity + enabled state. No rebuild — safe on
+ * every slider tick. The fixture mesh stays visible when `enabled=false` (a
+ * turned-off lamp is still a lamp) but its emissive glow goes to zero.
+ */
+export function applyCeilingFixtureSettings(
+  refs: CeilingFixtureRefs,
+  settings: RoomLightingFinish,
+): void {
+  const on = settings.enabled
+  const color = kelvinToRgb(settings.temperature_k)
+  // SpotLight intensity 1.0 reads dim at room scale; ×6 puts the 0–1 slider in
+  // "dim-to-living-room-bright" range. Tune empirically if scenes feel washed out.
+  refs.spot.intensity = on ? settings.intensity * 6 : 0
+  refs.spot.color.copy(color)
+
+  refs.mesh.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      const mat = obj.material
+      if (mat instanceof THREE.MeshStandardMaterial && mat.emissiveIntensity > 0) {
+        mat.emissive.copy(color)
+        mat.emissiveIntensity = on ? Math.max(0.3, settings.intensity) : 0
+      }
+    }
+  })
+}
+
+/** Swaps the luminaire mesh when `material_id` (fixture style) changes. */
+export function rebuildFixtureMesh(
+  refs: CeilingFixtureRefs,
+  materialId: string | null,
+  finishMaterials: FinishMaterial[],
+): CeilingFixtureRefs {
+  const kind = fixtureKindFromMaterial(materialId, finishMaterials)
+  refs.group.remove(refs.mesh)
+  refs.mesh.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      obj.geometry.dispose()
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
+      else obj.material.dispose()
+    }
+  })
+  const newMesh = buildFixtureMesh(kind)
+  refs.group.add(newMesh)
+  refs.mesh = newMesh
+  return refs
 }
 
 // ── Furniture (.glb) loading + caching ───────────────────────────────────────
@@ -753,7 +974,7 @@ function fillPlaceholder(group: THREE.Group, widthM: number, depthM: number, hei
   group.add(box)
 }
 
-/** Fills a group with a flat textured plane on the floor — for is_flat items. */
+/** Fills a group with a flat textured plane on the floor — for is_flat horizontal items (rugs). */
 async function fillFlatPlane(
   group: THREE.Group,
   widthM: number,
@@ -775,6 +996,135 @@ async function fillFlatPlane(
   plane.position.y = 0.002 // slightly above floor to avoid z-fighting
   plane.receiveShadow = true
   group.add(plane)
+}
+
+/**
+ * Fills a group with an upright textured plane — for is_flat vertical items
+ * (picture frames, wall art). The plane stands on the floor, facing +Z in
+ * local space; group.rotation.y decides which direction it faces in the room.
+ *
+ * The plane's origin sits at the base so the frame rests on the floor.
+ */
+async function fillVerticalFlatPlane(
+  group: THREE.Group,
+  widthM: number,
+  heightM: number,
+  imageUrl: string
+): Promise<void> {
+  const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+    new THREE.TextureLoader().load(imageUrl, resolve, undefined, reject)
+  })
+  texture.colorSpace = THREE.SRGBColorSpace
+  const geo = new THREE.PlaneGeometry(widthM, heightM)
+  const mat = new THREE.MeshStandardMaterial({
+    map: texture,
+    side: THREE.DoubleSide,
+    roughness: 0.85,
+  })
+  const plane = new THREE.Mesh(geo, mat)
+  plane.position.y = heightM / 2
+  plane.castShadow = true
+  plane.receiveShadow = true
+  group.add(plane)
+}
+
+/**
+ * Builds a real 3D picture frame: four moulding boxes forming the border,
+ * a recessed mat plane inside, and optionally an art plane over the mat.
+ *
+ * Layout (origin at base center, frame facing +Z):
+ *   - Front face of frame moulding at z=0, back at z=-frameDepthM
+ *   - Mat + art recessed at z=-frameDepthM + matInsetM (so they sit inside
+ *     the frame opening, not flush with the front face — this gives the
+ *     real picture-frame look)
+ *   - Border widths = (outer - mat) / 2, assumed symmetric (mat centered)
+ *
+ * When artUrl is null/undefined, only the empty mat shows through the
+ * opening (looks like an unfilled frame). Art texture loads asynchronously
+ * and is silently skipped on failure (the frame still renders).
+ */
+async function buildProceduralFrame(
+  group: THREE.Group,
+  outerWM: number,
+  outerHM: number,
+  matWM: number,
+  matHM: number,
+  artUrl: string | null | undefined
+): Promise<void> {
+  // Frame moulding depth (how far it protrudes from the wall).
+  const frameDepthM = 0.025
+  // How far the mat is recessed behind the front face of the frame.
+  const matInsetM = 0.012
+
+  // Clamp mat to strictly smaller than outer so there's always a visible
+  // border. If the data is bad (mat >= outer) we render a minimal 2cm border
+  // so the frame doesn't vanish — this makes the bug visible but recoverable.
+  const minBorder = 0.02
+  const borderWM = Math.max((outerWM - matWM) / 2, minBorder)
+  const borderHM = Math.max((outerHM - matHM) / 2, minBorder)
+  const innerWM = outerWM - borderWM * 2
+  const innerHM = outerHM - borderHM * 2
+
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a,
+    roughness: 0.55,
+    metalness: 0.05,
+  })
+
+  const mouldings: Array<[number, number, number, number, number]> = [
+    // [w, h, d, x, y] — z is always -frameDepthM/2 (centered across the depth)
+    [outerWM, borderHM, frameDepthM, 0, outerHM - borderHM / 2], // top
+    [outerWM, borderHM, frameDepthM, 0, borderHM / 2],           // bottom
+    [borderWM, innerHM, frameDepthM, -outerWM / 2 + borderWM / 2, outerHM / 2], // left
+    [borderWM, innerHM, frameDepthM, outerWM / 2 - borderWM / 2, outerHM / 2],  // right
+  ]
+  for (const [w, h, d, x, y] of mouldings) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), frameMat)
+    mesh.position.set(x, y, -d / 2)
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    group.add(mesh)
+  }
+
+  // Mat backing — off-white plane recessed behind the frame face. Sized
+  // slightly larger than the opening so there's no visible gap at the
+  // moulding's inner edge.
+  const matPlaneW = innerWM + 0.002
+  const matPlaneH = innerHM + 0.002
+  const matMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(matPlaneW, matPlaneH),
+    new THREE.MeshStandardMaterial({
+      color: 0xf2f0ea,
+      roughness: 0.9,
+      side: THREE.FrontSide,
+    })
+  )
+  matMesh.position.set(0, outerHM / 2, -frameDepthM + matInsetM)
+  matMesh.receiveShadow = true
+  group.add(matMesh)
+
+  if (!artUrl) return
+
+  try {
+    const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+      new THREE.TextureLoader().load(artUrl, resolve, undefined, reject)
+    })
+    texture.colorSpace = THREE.SRGBColorSpace
+    const artMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(innerWM, innerHM),
+      new THREE.MeshStandardMaterial({
+        map: texture,
+        roughness: 0.85,
+        side: THREE.FrontSide,
+      })
+    )
+    // 1mm in front of the mat.
+    artMesh.position.set(0, outerHM / 2, -frameDepthM + matInsetM + 0.001)
+    artMesh.receiveShadow = true
+    group.add(artMesh)
+  } catch (err) {
+    console.warn('[buildProceduralFrame] failed to load art texture:', err)
+  }
 }
 
 /** Fills a group with a clone of a preloaded .glb, scaled to target dims. */
@@ -824,6 +1174,16 @@ export interface FurnitureMeshParams {
   variant: FurnitureVariant
   item: FurnitureItem
   isFlat: boolean
+  /** 'horizontal' (rug-like, floor plane) or 'vertical' (picture frame, upright). Only read when isFlat=true. Defaults to 'horizontal'. */
+  flatOrientation?: FlatOrientation
+  /**
+   * Public URL of the custom art image to overlay inside the frame's mat.
+   * Only used for vertical flat items whose furniture_item has mat_opening_cm.
+   * Null/undefined = empty frame (shows just the frame product photo).
+   */
+  artUrl?: string | null
+  /** Mat opening (inner art area) in cm. Required to render the art overlay. */
+  matOpeningCm?: { w: number; h: number } | null
 }
 
 /**
@@ -836,7 +1196,7 @@ export function createFurnitureGroup(params: FurnitureMeshParams): {
   group: THREE.Group
   loader: () => Promise<void>
 } {
-  const { placed, variant, item, isFlat } = params
+  const { placed, variant, item, isFlat, flatOrientation = 'horizontal', artUrl, matOpeningCm } = params
 
   const widthM = (variant.width_cm ?? item.width_cm ?? 50) / 100
   const depthM = (variant.depth_cm ?? item.depth_cm ?? 50) / 100
@@ -855,13 +1215,34 @@ export function createFurnitureGroup(params: FurnitureMeshParams): {
   const loader = async () => {
     try {
       if (isFlat) {
-        // Flat items use the first uploaded image as a floor plane texture.
+        // Flat items use the first uploaded image as a texture plane.
+        // Horizontal = rug-style plane on the floor.
+        // Vertical   = upright plane (picture frame / wall art). Frames
+        //              optionally overlay a second plane sized to the mat
+        //              opening with the designer's chosen art.
         const url = variant.original_image_urls[0]
         if (!url) {
           fillPlaceholder(group, widthM * scaleFactor, depthM * scaleFactor, 0.02)
           return
         }
-        await fillFlatPlane(group, widthM * scaleFactor, depthM * scaleFactor, url)
+        if (flatOrientation === 'vertical') {
+          const scaledW = widthM * scaleFactor
+          const scaledH = heightM * scaleFactor
+          if (matOpeningCm && matOpeningCm.w > 0 && matOpeningCm.h > 0) {
+            // Picture frame: build a real 3D frame (moulding + recessed mat
+            // + optional art). The variant's product photo is ignored — the
+            // frame geometry is what makes it look like a frame from any
+            // angle, not a photographed frame flattened onto a plane.
+            const matWM = (matOpeningCm.w / 100) * scaleFactor
+            const matHM = (matOpeningCm.h / 100) * scaleFactor
+            await buildProceduralFrame(group, scaledW, scaledH, matWM, matHM, artUrl)
+          } else {
+            // Plain wall art (poster / canvas print) — no mat opening.
+            await fillVerticalFlatPlane(group, scaledW, scaledH, url)
+          }
+        } else {
+          await fillFlatPlane(group, widthM * scaleFactor, depthM * scaleFactor, url)
+        }
       } else if (variant.glb_path) {
         const source = await loadGlb(variant.glb_path)
         fillWithGlb(group, source, widthM, depthM, heightM, scaleFactor)

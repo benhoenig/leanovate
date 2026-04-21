@@ -6,15 +6,15 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { supabase, rawStorageUpload } from '@/lib/supabase'
 import type { FinishType } from '@/types'
+import { resolveLightingSettings } from '@/lib/roomScene'
 import CatalogPanel from './CatalogPanel'
 import FixturePickerPanel from './FixturePickerPanel'
 import TemplatePanel from './TemplatePanel'
 
 // Door + window finishes were dropped — those are placed fixtures now.
-// Lighting is deferred (backlog): hide from the picker but keep the type
-// available so a future ceiling-light UI can slot back in without a schema
-// change.
-const FINISH_TYPES: FinishType[] = ['wall', 'floor']
+// Lighting = ceiling-fixture style; the on/off + temperature + brightness
+// knobs live in RightPanel → Lighting.
+const FINISH_TYPES: FinishType[] = ['wall', 'floor', 'lighting']
 
 export default function LeftSidebar() {
   const { t } = useTranslation()
@@ -51,11 +51,14 @@ export default function LeftSidebar() {
   const handleFinishSelect = (type: FinishType, materialId: string) => {
     if (!selectedRoom) return
     const currentFinishes = selectedRoom.finishes ?? {}
-    const updated = {
-      ...currentFinishes,
-      [type]: { material_id: materialId, custom_url: null },
-    }
-    updateRoom(selectedRoom.id, { finishes: updated })
+    // Lighting has extra fields (enabled/preset/temperature/intensity) owned
+    // by RightPanel → Lighting. Preserve them when the user just swaps the
+    // fixture style.
+    const nextEntry =
+      type === 'lighting'
+        ? { ...resolveLightingSettings(currentFinishes.lighting), material_id: materialId, custom_url: null }
+        : { material_id: materialId, custom_url: null }
+    updateRoom(selectedRoom.id, { finishes: { ...currentFinishes, [type]: nextEntry } })
   }
 
   const handleCustomUpload = async (type: FinishType, file: File) => {

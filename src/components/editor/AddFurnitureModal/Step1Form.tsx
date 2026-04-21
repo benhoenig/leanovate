@@ -41,6 +41,12 @@ export default function Step1Form(props: {
   setDepthCm: (v: string) => void
   heightCm: string
   setHeightCm: (v: string) => void
+  // Picture-frame fields — only shown when the selected category has accepts_art
+  acceptsArt: boolean
+  matOpeningWCm: string
+  setMatOpeningWCm: (v: string) => void
+  matOpeningHCm: string
+  setMatOpeningHCm: (v: string) => void
   selectedStyles: string[]
   toggleStyle: (id: string) => void
   // Submit
@@ -70,6 +76,9 @@ export default function Step1Form(props: {
     widthCm, setWidthCm,
     depthCm, setDepthCm,
     heightCm, setHeightCm,
+    acceptsArt,
+    matOpeningWCm, setMatOpeningWCm,
+    matOpeningHCm, setMatOpeningHCm,
     selectedStyles, toggleStyle,
     isSavingItem,
     onCancel,
@@ -206,6 +215,34 @@ export default function Step1Form(props: {
           <input className="field-input" type="number" placeholder="—" value={heightCm} onChange={(e) => setHeightCm(e.target.value)} />
         </div>
       </div>
+
+      {/* Mat opening — only for picture-frame categories */}
+      {acceptsArt && (
+        <div className="field-group">
+          <label className="field-label">
+            {t('addFurniture.matOpeningLabel', { defaultValue: 'Mat opening (inner art area)' })}
+          </label>
+          <div className="field-row-2">
+            <input
+              className="field-input"
+              type="number"
+              placeholder={t('addFurniture.matOpeningWPlaceholder', { defaultValue: 'Width cm' })}
+              value={matOpeningWCm}
+              onChange={(e) => setMatOpeningWCm(e.target.value)}
+            />
+            <input
+              className="field-input"
+              type="number"
+              placeholder={t('addFurniture.matOpeningHPlaceholder', { defaultValue: 'Height cm' })}
+              value={matOpeningHCm}
+              onChange={(e) => setMatOpeningHCm(e.target.value)}
+            />
+          </div>
+          <p className="field-hint">
+            {t('addFurniture.matOpeningHint', { defaultValue: 'The visible window inside the frame where uploaded art renders. Must fit inside the outer width × height.' })}
+          </p>
+        </div>
+      )}
 
       {/* Style tags — wall fixtures aren't style-tagged (they're architectural) */}
       {!isWallMode && (

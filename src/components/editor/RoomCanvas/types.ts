@@ -20,8 +20,14 @@ export interface SceneContext {
   controlsRef: RefObject<OrbitControls | null>
   roamControlsRef: RefObject<PointerLockControls | null>
 
-  /** Shell group — rebuilt when geometry/finishes change. Floor+walls+ceiling+lights. */
+  /** Shell group — rebuilt when geometry/finishes change. Floor+walls+ceiling. */
   shellGroupRef: RefObject<THREE.Group | null>
+  /**
+   * Lighting group — persistent across shell rebuilds. Holds the studio rig
+   * (ambient/sun/fill) + ceiling fixture (luminaire mesh + SpotLight).
+   * Slider changes mutate refs in place without rebuilding the shell.
+   */
+  lightingGroupRef: RefObject<THREE.Group | null>
   /** Persistent across shell rebuilds. */
   furnitureLayerRef: RefObject<THREE.Group | null>
   /** Persistent across shell rebuilds. Holds vertex + midpoint drag handles. */

@@ -40,6 +40,7 @@ export function useThreeScene(room: Room): SceneContext {
   const roamKeysRef = useRef({ w: false, a: false, s: false, d: false, shift: false })
 
   const shellGroupRef = useRef<THREE.Group | null>(null)
+  const lightingGroupRef = useRef<THREE.Group | null>(null)
   const ceilingMeshRef = useRef<THREE.Mesh | null>(null)
   const furnitureLayerRef = useRef<THREE.Group | null>(null)
   const handleLayerRef = useRef<THREE.Group | null>(null)
@@ -118,6 +119,13 @@ export function useThreeScene(room: Room): SceneContext {
     shellGroup.name = 'shell-layer'
     scene.add(shellGroup)
     shellGroupRef.current = shellGroup
+
+    // Persistent lighting group — survives shell rebuilds so slider-driven
+    // setting changes don't trigger a geometry rebuild.
+    const lightingGroup = new THREE.Group()
+    lightingGroup.name = 'lighting-layer'
+    scene.add(lightingGroup)
+    lightingGroupRef.current = lightingGroup
 
     const furnitureLayer = new THREE.Group()
     furnitureLayer.name = 'furniture-layer'
@@ -283,6 +291,7 @@ export function useThreeScene(room: Room): SceneContext {
       cameraRef.current = null
       controlsRef.current = null
       shellGroupRef.current = null
+      lightingGroupRef.current = null
       furnitureLayerRef.current = null
       handleLayerRef.current = null
       gridGroupRef.current = null
@@ -301,6 +310,7 @@ export function useThreeScene(room: Room): SceneContext {
     controlsRef,
     roamControlsRef,
     shellGroupRef,
+    lightingGroupRef,
     furnitureLayerRef,
     handleLayerRef,
     gridGroupRef,

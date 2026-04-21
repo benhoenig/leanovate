@@ -68,7 +68,11 @@ interface CanvasState {
   /** Push an undo command after continuous rotation (e.g. scroll-wheel drag). */
   commitRotation: (id: string, prevDeg: number) => void
   scaleItem: (id: string, scaleFactor: number) => void
+  /** Set the vertical offset (y_cm) in room-local cm. 0 = resting on floor; positive = lifted / wall-hung. */
+  setItemHeight: (id: string, yCm: number) => void
   switchVariant: (id: string, variantId: string, price: number | null) => void
+  /** Set the art image on a placed picture frame. Pass null to clear (empty frame). */
+  setArt: (id: string, artId: string | null) => Promise<{ error: string | null }>
   removeItem: (id: string) => Promise<void>
 
   commitMove: (id: string, prevX: number, prevY: number) => void
@@ -291,6 +295,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
+  setItemHeight: (id, yCm) => {
+    const clamped = Math.max(0, yCm)
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, y_cm: clamped } : i
+      ),
+    }))
+    useProjectStore.setState({ isDirty: true })
+    rawUpdate('placed_furniture', id, { y_cm: clamped }).then(({ error }) => {
+      if (error) console.error('setItemHeight DB:', error)
+    })
+  },
+
   rotateItem: (id) => {
     const item = get().placedFurniture.find((i) => i.id === id)
     if (!item) return
@@ -342,6 +359,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       if (error) console.error('switchVariant DB:', error)
     })
     pushCommand(set, get, { type: 'switchVariant', itemId: id, prevVariantId, prevPrice, nextVariantId: variantId, nextPrice: price })
+  },
+
+  setArt: async (id, artId) => {
+    const item = get().placedFurniture.find((i) => i.id === id)
+    if (!item) return { error: null }
+    // Optimistic update — swap art_id in local state, persist to DB. No undo
+    // command for art swaps (feels like variant swaps — cheap to redo manually).
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, art_id: artId } : i
+      ),
+    }))
+    const { error } = await rawUpdate('placed_furniture', id, { art_id: artId })
+    if (error) {
+      console.error('setArt DB:', error)
+      // Roll back local state so UI matches persisted value.
+      set((state) => ({
+        placedFurniture: state.placedFurniture.map((i) =>
+          i.id === id ? { ...i, art_id: item.art_id } : i
+        ),
+      }))
+      return { error }
+    }
+    return { error: null }
   },
 
   removeItem: async (id) => {

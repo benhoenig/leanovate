@@ -74,9 +74,19 @@ export function usePlacementGhosts(
         price_at_placement: variant.price_thb,
         scale_factor: 1,
         sort_order: 0,
+        art_id: null,
         created_at: '',
       }
-      const { group, loader } = createFurnitureGroup({ placed: ghostPlaced, variant, item, isFlat })
+      const category = catalog.categories.find((c) => c.id === item.category_id)
+      const { group, loader } = createFurnitureGroup({
+        placed: ghostPlaced,
+        variant,
+        item,
+        isFlat,
+        flatOrientation: category?.flat_orientation ?? 'horizontal',
+        artUrl: null,
+        matOpeningCm: item.mat_opening_cm,
+      })
       // Make it translucent once the async loader resolves
       loader().then(() => {
         group.traverse((o) => {

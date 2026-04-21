@@ -1,13 +1,17 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCw, Trash2, ExternalLink } from 'lucide-react'
+import { RotateCw, Trash2, ExternalLink, ImageIcon } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import { useArtStore } from '@/stores/useArtStore'
 import PlacementSection from './PlacementSection'
+import ArtPickerModal from '../ArtPickerModal'
 
-export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number } }) {
+export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number; art_id: string | null; y_cm: number } }) {
   const { t } = useTranslation()
-  const { rotateItem, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem } = useCanvasStore()
+  const { rotateItem, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem, setArt, setItemHeight } = useCanvasStore()
+  const { getArtById, getArtUrl } = useArtStore()
+  const [artPickerOpen, setArtPickerOpen] = useState(false)
   const scaleBeforeRef = useRef(placed.scale_factor ?? 1)
   const rotBeforeRef = useRef(placed.rotation_deg)
   const catalogState = useCatalogStore()
@@ -139,6 +143,37 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
             <span className="fp-scale-pct">°</span>
           </div>
         </div>
+        {category?.flat_orientation === 'vertical' && (
+          <div className="fp-scale-row">
+            <label className="fp-scale-label">
+              {t('editor.properties.heightAboveFloor', { defaultValue: 'Height above floor' })}
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={240}
+              step={1}
+              value={Math.round(placed.y_cm)}
+              onChange={(e) => setItemHeight(placed.id, parseInt(e.target.value))}
+              className="fp-scale-slider"
+            />
+            <div className="fp-scale-input-wrap">
+              <input
+                type="number"
+                min={0}
+                max={240}
+                step={1}
+                value={Math.round(placed.y_cm)}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  if (!isNaN(v)) setItemHeight(placed.id, v)
+                }}
+                className="fp-scale-input"
+              />
+              <span className="fp-scale-pct">cm</span>
+            </div>
+          </div>
+        )}
         {sourceUrl && sourceUrl !== 'manual' && (
           <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="fp-link">
             <ExternalLink size={11} /> {t('editor.properties.viewProduct')}
@@ -148,6 +183,44 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
 
       <div className="panel-divider" />
 
+      {/* Picture frame — art picker */}
+      {category?.accepts_art && item?.mat_opening_cm && (
+        <>
+          <div className="panel-section">
+            <span className="section-title">{t('editor.properties.artwork')}</span>
+            {(() => {
+              const art = getArtById(placed.art_id)
+              if (art) {
+                const scopeLabel = art.scope === 'team'
+                  ? t('editor.properties.artScopeTeam')
+                  : t('editor.properties.artScopePrivate')
+                return (
+                  <div className="fp-art-row">
+                    <img src={getArtUrl(art)} alt={art.name} className="fp-art-thumb" />
+                    <div className="fp-art-meta">
+                      <div className="fp-art-name">{art.name}</div>
+                      <div className="fp-art-sub">{scopeLabel} · {art.aspect_ratio.toFixed(2)}:1</div>
+                    </div>
+                  </div>
+                )
+              }
+              return <div className="fp-art-empty">{t('editor.properties.noArt')}</div>
+            })()}
+            <div className="fp-art-actions">
+              <button className="fp-action-btn" onClick={() => setArtPickerOpen(true)}>
+                <ImageIcon size={13} /> {placed.art_id ? t('editor.properties.changeArt') : t('editor.properties.chooseArt')}
+              </button>
+              {placed.art_id && (
+                <button className="fp-action-btn fp-action-btn--ghost" onClick={() => setArt(placed.id, null)}>
+                  {t('editor.properties.removeArt')}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="panel-divider" />
+        </>
+      )}
+
       {/* Placement controls — edit the master item/variant, not just this instance */}
       {item && currentVariant && (
         <PlacementSection
@@ -155,6 +228,15 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
           variant={currentVariant}
           categoryDefaultBlock={category?.default_block_size ?? 'big'}
           categoryIsFlat={category?.is_flat ?? false}
+        />
+      )}
+
+      {artPickerOpen && item?.mat_opening_cm && (
+        <ArtPickerModal
+          frameAspectRatio={item.mat_opening_cm.w / item.mat_opening_cm.h}
+          currentArtId={placed.art_id}
+          onClose={() => setArtPickerOpen(false)}
+          onPick={(artId) => setArt(placed.id, artId)}
         />
       )}
 
