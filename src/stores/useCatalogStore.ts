@@ -96,6 +96,8 @@ interface CatalogState {
   loadStyles: () => Promise<void>
   loadItems: (filter?: { status?: ItemStatus }) => Promise<void>
   loadVariantsForItem: (itemId: string) => Promise<void>
+  /** Fetch specific variants by id (used to preload fixture variants referenced from room geometry). */
+  loadVariantsByIds: (variantIds: string[]) => Promise<void>
   loadItemStyles: (itemId: string) => Promise<void>
 
   // ─ Item CRUD ─────────────────────────────────────────────────────────────
@@ -229,6 +231,49 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       console.error('loadVariantsForItem:', err)
     } finally {
       set({ isLoadingVariants: false })
+    }
+  },
+
+  loadVariantsByIds: async (variantIds) => {
+    const unique = [...new Set(variantIds)].filter(Boolean)
+    if (unique.length === 0) return
+    // Skip any variant id we already have cached in any item bucket.
+    const state = get()
+    const known = new Set<string>()
+    for (const list of Object.values(state.variants)) {
+      for (const v of list) known.add(v.id)
+    }
+    const missing = unique.filter((id) => !known.has(id))
+    if (missing.length === 0) return
+    try {
+      const { data, error } = await supabase
+        .from('furniture_variants')
+        .select('*')
+        .in('id', missing)
+      if (error) throw error
+      const fetched = (data ?? []) as FurnitureVariant[]
+      // Group by parent item id so the existing resolveVariant lookup finds them.
+      const byItem = new Map<string, FurnitureVariant[]>()
+      for (const v of fetched) {
+        const arr = byItem.get(v.furniture_item_id) ?? []
+        arr.push(v)
+        byItem.set(v.furniture_item_id, arr)
+      }
+      set((s) => {
+        const next = { ...s.variants }
+        for (const [itemId, vs] of byItem) {
+          const existing = next[itemId] ?? []
+          // Merge — keep any variants already loaded for the same item, add new ones.
+          const merged = [...existing]
+          for (const v of vs) {
+            if (!merged.some((x) => x.id === v.id)) merged.push(v)
+          }
+          next[itemId] = merged
+        }
+        return { variants: next }
+      })
+    } catch (err) {
+      console.error('loadVariantsByIds:', err)
     }
   },
 

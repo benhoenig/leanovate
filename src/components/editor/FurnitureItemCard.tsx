@@ -96,11 +96,20 @@ export default function FurnitureItemCard({
     onOpenDetails()
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onPlace()
+    }
+  }
+
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="fi-tile"
       onClick={onPlace}
+      onKeyDown={handleKeyDown}
       title={`${item.name}${category ? ` · ${category.name}` : ''}`}
     >
       {/* Thumbnail (square) */}
@@ -295,6 +304,6 @@ export default function FurnitureItemCard({
         }
         .spin { animation: spin 0.9s linear infinite; }
       `}</style>
-    </button>
+    </div>
   )
 }

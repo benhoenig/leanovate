@@ -53,6 +53,21 @@ export default function EditorPage() {
         }
       }
 
+      // Preload fixture variants referenced from the room's geometry so the
+      // room shell can resolve them without waiting for the Fixture picker
+      // panel to mount. Without this the shell renders the fallback panel
+      // until the user opens the picker.
+      const room = useProjectStore.getState().rooms.find((r) => r.id === selectedRoomId)
+      if (room) {
+        const fixtureVariantIds: string[] = [
+          ...(room.geometry?.doors ?? []).map((d) => d.variant_id).filter((x): x is string => !!x),
+          ...(room.geometry?.windows ?? []).map((w) => w.variant_id).filter((x): x is string => !!x),
+        ]
+        if (fixtureVariantIds.length > 0) {
+          void catalog.loadVariantsByIds(fixtureVariantIds)
+        }
+      }
+
       // Check for price staleness
       let staleCount = 0
       for (const pf of placed) {
@@ -67,6 +82,54 @@ export default function EditorPage() {
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRoomId])
+
+  // Poll processing fixture variants so the room shell picks up the .glb
+  // as soon as TRELLIS completes — even if the Fixture picker panel is
+  // closed. Uses rawSelect to bypass the Supabase client (its polling
+  // path would otherwise collide with CatalogPanel/FixturePicker polls).
+  useEffect(() => {
+    if (!selectedRoomId) return
+    const interval = setInterval(async () => {
+      const room = useProjectStore.getState().rooms.find((r) => r.id === selectedRoomId)
+      if (!room) return
+      const fixtureVariantIds = [
+        ...(room.geometry?.doors ?? []).map((d) => d.variant_id).filter((x): x is string => !!x),
+        ...(room.geometry?.windows ?? []).map((w) => w.variant_id).filter((x): x is string => !!x),
+      ]
+      if (fixtureVariantIds.length === 0) return
+
+      const catalog = useCatalogStore.getState()
+      const pending: string[] = []
+      for (const id of fixtureVariantIds) {
+        for (const list of Object.values(catalog.variants)) {
+          const v = list.find((x) => x.id === id)
+          if (v && (v.render_status === 'processing' || v.render_status === 'waiting')) {
+            pending.push(id)
+            break
+          }
+        }
+      }
+      if (pending.length === 0) return
+
+      const { rawSelect } = await import('@/lib/supabase')
+      const { data, error } = await rawSelect<import('@/types').FurnitureVariant>(
+        'furniture_variants',
+        `id=in.(${pending.join(',')})`,
+      )
+      if (error || !data) return
+      useCatalogStore.setState((s) => {
+        const next = { ...s.variants }
+        for (const v of data) {
+          const itemId = v.furniture_item_id
+          const existing = next[itemId] ?? []
+          next[itemId] = existing.map((x) => (x.id === v.id ? v : x))
+          if (!existing.some((x) => x.id === v.id)) next[itemId] = [...next[itemId], v]
+        }
+        return { variants: next }
+      })
+    }, 5000)
+    return () => clearInterval(interval)
   }, [selectedRoomId])
 
   // Warn on browser tab close

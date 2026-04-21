@@ -122,6 +122,18 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   const fixtureGhostRef = useRef<THREE.Mesh | null>(null)
   /** Container for per-wall cm length labels shown in Edit Shape mode. */
   const dimLabelsRef = useRef<HTMLDivElement>(null)
+  /**
+   * Fixture move state: set when the user has "picked up" a door/window by
+   * clicking it. The fixture then follows the cursor until the next click
+   * commits, or Escape cancels (restoring prevGeometry).
+   */
+  const fixtureMoveRef = useRef<{
+    fixtureId: string
+    fixtureType: 'door' | 'window'
+    prevGeometry: import('@/types').RoomGeometry
+    prevWidthCm: number
+    prevHeightCm: number
+  } | null>(null)
   /** Room ID the camera was last framed for — avoid re-framing on every geometry tweak. */
   const framedRoomIdRef = useRef<string | null>(null)
   /** Vertex-drag state for edit shape mode. */
@@ -183,6 +195,41 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
     const hit = new THREE.Vector3()
     if (!raycaster.ray.intersectPlane(plane, hit)) return null
     return { x: hit.x, z: hit.z }
+  }, [])
+
+  /**
+   * Raycast against door / window meshes. Returns the hit fixture's id + type,
+   * or null. Walks up the parent tree looking for `userData.fixtureId`, which
+   * `buildRoomShell` stamps onto each fixture's slot group.
+   */
+  const raycastFixture = useCallback((clientX: number, clientY: number):
+    | { fixtureId: string; fixtureType: 'door' | 'window' }
+    | null => {
+    const container = containerRef.current
+    const camera = cameraRef.current
+    const shell = shellGroupRef.current
+    if (!container || !camera || !shell) return null
+
+    const rect = container.getBoundingClientRect()
+    const mouse = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    )
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(mouse, camera)
+    const hits = raycaster.intersectObjects(shell.children, true)
+    for (const hit of hits) {
+      let o: THREE.Object3D | null = hit.object
+      while (o) {
+        const fid = o.userData?.fixtureId
+        const ftype = o.userData?.fixtureType
+        if (fid && (ftype === 'door' || ftype === 'window')) {
+          return { fixtureId: fid as string, fixtureType: ftype }
+        }
+        o = o.parent
+      }
+    }
+    return null
   }, [])
 
   const raycastFurniture = useCallback((clientX: number, clientY: number): string | null => {
@@ -1126,6 +1173,32 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         return
       }
 
+      // Fixture move: first click on a door/window picks it up (fixtureMoveRef
+      // set + fixture follows the cursor in pointermove). Next click commits.
+      // Escape restores the pre-pickup geometry.
+      const fm = fixtureMoveRef.current
+      if (fm) {
+        // Second click — commit wherever the fixture currently is.
+        commitShapeEdit(fm.prevGeometry, fm.prevWidthCm, fm.prevHeightCm)
+        fixtureMoveRef.current = null
+        return
+      }
+      const fixHit = raycastFixture(e.clientX, e.clientY)
+      if (fixHit) {
+        const room0 = useProjectStore.getState().rooms.find((r) => r.id === room.id)
+        if (room0) {
+          useCanvasStore.getState().setSelectedFixture(fixHit.fixtureId)
+          fixtureMoveRef.current = {
+            fixtureId: fixHit.fixtureId,
+            fixtureType: fixHit.fixtureType,
+            prevGeometry: JSON.parse(JSON.stringify(room0.geometry)),
+            prevWidthCm: room0.width_cm,
+            prevHeightCm: room0.height_cm,
+          }
+        }
+        return
+      }
+
       // Check if we hit a furniture item
       const hitId = raycastFurniture(e.clientX, e.clientY)
       if (hitId) {
@@ -1149,6 +1222,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       } else {
         // Clicked empty space → deselect
         useCanvasStore.getState().setSelectedItem(null)
+        useCanvasStore.getState().setSelectedFixture(null)
       }
     }
 
@@ -1163,6 +1237,53 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         const snapU = bypass ? hit.x : Math.round(hit.x / stepM) * stepM
         const snapV = bypass ? hit.z : Math.round(hit.z / stepM) * stepM
         updateVertexLocal(vd.vertexIndex, snapU, snapV)
+        return
+      }
+
+      // Fixture move (door / window follows cursor until next click commits).
+      // Skip when any button is held — that's an orbit drag, not a follow.
+      const fm = fixtureMoveRef.current
+      if (fm && e.buttons === 0) {
+        const hit = raycastFloor(e.clientX, e.clientY)
+        if (!hit) return
+        const projStore = useProjectStore
+        const room0 = projStore.getState().rooms.find((r) => r.id === room.id)
+        if (!room0) return
+        const verts = getVertices(room0)
+        const snap = nearestWallSnap(hit.x, hit.z, verts)
+        if (snap.length < 0.01) return
+
+        const geo = room0.geometry as import('@/types').RoomGeometry
+        const existing = fm.fixtureType === 'door'
+          ? (geo.doors ?? []).find((d) => d.id === fm.fixtureId)
+          : (geo.windows ?? []).find((w) => w.id === fm.fixtureId)
+        if (!existing) return
+        const fixtureW = existing.width_m ?? (fm.fixtureType === 'door' ? 0.8 : 1.0)
+
+        // Clamp position so the fixture fits on the picked wall.
+        const halfW = Math.min(fixtureW / 2, snap.length * 0.45)
+        const clamped = Math.max(
+          halfW / snap.length,
+          Math.min(1 - halfW / snap.length, snap.position),
+        )
+
+        const nextGeo: import('@/types').RoomGeometry = fm.fixtureType === 'door'
+          ? {
+              ...geo,
+              doors: (geo.doors ?? []).map((d) =>
+                d.id === fm.fixtureId ? { ...d, wall_index: snap.wallIndex, position: clamped } : d,
+              ),
+            }
+          : {
+              ...geo,
+              windows: (geo.windows ?? []).map((w) =>
+                w.id === fm.fixtureId ? { ...w, wall_index: snap.wallIndex, position: clamped } : w,
+              ),
+            }
+        projStore.setState((state) => ({
+          rooms: state.rooms.map((r) => (r.id === room.id ? { ...r, geometry: nextGeo } : r)),
+          isDirty: true,
+        }))
         return
       }
 
@@ -1279,6 +1400,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
         container.releasePointerCapture(e.pointerId)
         commitShapeEdit(wd.prevGeometry, wd.prevWidthCm, wd.prevHeightCm)
       }
+
     }
 
     const onWheel = (e: WheelEvent) => {
@@ -1332,6 +1454,20 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
 
       const s = useCanvasStore.getState()
       if (e.key === 'Escape') {
+        // Cancel an in-progress fixture pickup first — restore pre-pickup
+        // geometry without persisting.
+        const fm = fixtureMoveRef.current
+        if (fm) {
+          useProjectStore.setState((state) => ({
+            rooms: state.rooms.map((r) =>
+              r.id === room.id
+                ? { ...r, geometry: fm.prevGeometry, width_cm: fm.prevWidthCm, height_cm: fm.prevHeightCm }
+                : r,
+            ),
+          }))
+          fixtureMoveRef.current = null
+          return
+        }
         if (s.placementMode) s.cancelPlacement()
         else if (s.fixturePlacementType) s.setFixturePlacementMode(null)
         else if (s.shapeEditMode && s.selectedVertexIndex != null) s.setSelectedVertex(null)
@@ -1629,7 +1765,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       window.removeEventListener('keyup', onKeyUp)
       clearTimeout(wheelCommitTimer)
     }
-  }, [room, raycastFloor, raycastFurniture, raycastHandle, raycastWall])
+  }, [room, raycastFloor, raycastFurniture, raycastHandle, raycastWall, raycastFixture])
 
   // Cursor style hint based on placement mode
   const placementMode = useCanvasStore((s) => s.placementMode)

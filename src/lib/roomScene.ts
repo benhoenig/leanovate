@@ -220,6 +220,8 @@ export function buildRoomShell(
         slot.name = `door-slot:${door.id}`
         slot.position.set(doorX, 0, doorZ)
         slot.rotation.y = -angle
+        slot.userData.fixtureId = door.id
+        slot.userData.fixtureType = 'door'
         scene.add(slot)
         void loadGlb(variant.glb_path).then((source) => {
           fillWithGlb(slot, source, x1 - x0, 0.06, doorH, 1)
@@ -232,13 +234,66 @@ export function buildRoomShell(
           slot.add(fallback)
         })
       } else {
-        // Fallback: generic brown panel
-        const doorPanelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
-        const doorPanel = new THREE.Mesh(doorPanelGeo, doorMat)
-        doorPanel.position.set(doorX, doorLocalY, doorZ)
-        doorPanel.rotation.y = -angle
-        doorPanel.castShadow = true
-        scene.add(doorPanel)
+        // Fallback: generic panel. Log why so we can tell apart the
+        // "no variant picked" vs "variant not loaded" vs "variant has no
+        // .glb" cases without guessing.
+        const reason = !door.variant_id
+          ? 'no variant_id on door record'
+          : !variant
+            ? `variant ${door.variant_id} not loaded in catalog store`
+            : !variant.glb_path
+              ? `variant ${door.variant_id} has no glb_path (render_status=${variant.render_status})`
+              : `variant ${door.variant_id} render_status=${variant.render_status} (not completed)`
+        console.info(`[roomScene] door ${door.id} rendering fallback: ${reason}`)
+
+        // Slot sits in the cutout; populated below — synchronously with a
+        // solid panel, or asynchronously with the uploaded photo as a texture
+        // once it finishes loading.
+        const slot = new THREE.Group()
+        slot.name = `door-fallback-slot:${door.id}`
+        slot.position.set(doorX, doorLocalY, doorZ)
+        slot.rotation.y = -angle
+        slot.userData.fixtureId = door.id
+        slot.userData.fixtureType = 'door'
+        scene.add(slot)
+
+        const panelGeo = new THREE.PlaneGeometry(x1 - x0, doorH)
+        const placeholderUrl = variant?.original_image_urls?.[0]
+
+        if (placeholderUrl) {
+          // Render a neutral grey panel immediately so the cutout isn't
+          // empty, then swap in the textured version once the image loads.
+          const initialMat = new THREE.MeshStandardMaterial({
+            color: 0xC4B8A8,
+            side: THREE.DoubleSide,
+            roughness: 0.8,
+          })
+          const initialPanel = new THREE.Mesh(panelGeo, initialMat)
+          initialPanel.castShadow = true
+          slot.add(initialPanel)
+
+          new THREE.TextureLoader().load(
+            placeholderUrl,
+            (tex) => {
+              tex.colorSpace = THREE.SRGBColorSpace
+              const texturedMat = new THREE.MeshStandardMaterial({
+                map: tex,
+                side: THREE.DoubleSide,
+                roughness: 0.8,
+              })
+              initialPanel.material = texturedMat
+              initialMat.dispose()
+            },
+            undefined,
+            (err) => {
+              console.warn(`[roomScene] door placeholder texture failed for ${door.id}:`, err)
+            },
+          )
+        } else {
+          const doorPanel = new THREE.Mesh(panelGeo, doorMat)
+          doorPanel.castShadow = true
+          slot.add(doorPanel)
+        }
       }
     }
 
@@ -277,6 +332,8 @@ export function buildRoomShell(
         slot.name = `window-slot:${win.id}`
         slot.position.set(winX, glassLocalY, winZ)
         slot.rotation.y = -angle
+        slot.userData.fixtureId = win.id
+        slot.userData.fixtureType = 'window'
         scene.add(slot)
         void loadGlb(winVariant.glb_path).then((source) => {
           // fillWithGlb centers its content at y=size/2; windows want centered on
@@ -294,11 +351,16 @@ export function buildRoomShell(
       }
 
       function renderFallbackWindow() {
+        const slot = new THREE.Group()
+        slot.name = `window-fallback-slot:${win.id}`
+        slot.userData.fixtureId = win.id
+        slot.userData.fixtureType = 'window'
+
         const glassGeo = new THREE.PlaneGeometry(x1 - x0, winH)
         const glass = new THREE.Mesh(glassGeo, windowGlassMat)
         glass.position.set(winX, glassLocalY, winZ)
         glass.rotation.y = -angle
-        scene.add(glass)
+        slot.add(glass)
 
         const frameThickness = 0.04
         const frameGeo = new THREE.PlaneGeometry(x1 - x0 + frameThickness * 2, winH + frameThickness * 2)
@@ -313,7 +375,8 @@ export function buildRoomShell(
         const nv = (b.u - a.u) / segLen
         frame.position.x -= nu * 0.005
         frame.position.z -= nv * 0.005
-        scene.add(frame)
+        slot.add(frame)
+        scene.add(slot)
       }
     }
 

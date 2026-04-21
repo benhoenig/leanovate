@@ -40,6 +40,40 @@ export function getAuthToken(): string {
   return token
 }
 
+/**
+ * Read via raw fetch (bypassing the Supabase JS client to avoid deadlocks
+ * with concurrent client calls — see CLAUDE.md Key Rule #8).
+ *
+ *   rawSelect('furniture_variants', 'id=in.(uuid1,uuid2)')
+ *   rawSelect('rooms', 'project_id=eq.<id>', 'id,name,geometry')
+ */
+export async function rawSelect<T>(
+  table: string,
+  filter: string,
+  columns: string = '*',
+): Promise<{ data: T[] | null; error: string | null }> {
+  const token = getAuthToken()
+  try {
+    const url = `${supabaseUrl}/rest/v1/${table}?select=${encodeURIComponent(columns)}&${filter}`
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: supabaseAnonKey,
+      },
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      console.error(`[rawSelect] ${table} failed:`, resp.status, text)
+      return { data: null, error: text || `HTTP ${resp.status}` }
+    }
+    const arr = await resp.json()
+    return { data: arr as T[], error: null }
+  } catch (err) {
+    console.error(`[rawSelect] ${table} network error:`, err)
+    return { data: null, error: String(err) }
+  }
+}
+
 export async function rawInsert<T>(table: string, row: Record<string, unknown>): Promise<{ data: T | null; error: string | null }> {
   const token = getAuthToken()
   try {
