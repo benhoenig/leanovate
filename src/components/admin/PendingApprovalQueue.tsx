@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, X, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
+import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureItem, FurnitureVariant } from '@/types'
 
 interface PendingItemWithDetails {
@@ -109,7 +110,7 @@ export default function PendingApprovalQueue() {
   }
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.pending.loading')}</p>
+    return <AdminListSkeleton />
   }
 
   if (pendingItems.length === 0) {

@@ -8,6 +8,8 @@ import { getPublicStorageUrl } from '@/lib/supabase'
 import FurnitureItemCard from './FurnitureItemCard'
 import AddFurnitureModal from './AddFurnitureModal'
 import ModelApprovalModal from './ModelApprovalModal'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { useDelayedTrue } from '@/hooks/useDelayedTrue'
 import type { FurnitureItem, FurnitureVariant } from '@/types'
 
 export default function CatalogPanel() {
@@ -188,7 +190,7 @@ export default function CatalogPanel() {
       {/* Tile grid */}
       <div className="catalog-grid-wrap">
         {isLoading && displayItems.length === 0 && (
-          <div className="catalog-empty">{t('catalog.loading')}</div>
+          <CatalogGridSkeleton />
         )}
 
         {!isLoading && displayItems.length === 0 && (
@@ -434,6 +436,25 @@ export default function CatalogPanel() {
           background: rgba(43, 168, 160, 0.12);
         }
       `}</style>
+    </div>
+  )
+}
+
+// ── Skeleton for initial catalog load ──────────────────────────────────────
+// Gated on a 150ms delay so fast loads don't flash a skeleton.
+
+function CatalogGridSkeleton() {
+  const show = useDelayedTrue(true)
+  if (!show) return null
+  return (
+    <div className="catalog-grid">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Skeleton width="100%" style={{ aspectRatio: '1 / 1' }} radius={10} />
+          <Skeleton width="80%" height={11} />
+          <Skeleton width="50%" height={10} />
+        </div>
+      ))}
     </div>
   )
 }

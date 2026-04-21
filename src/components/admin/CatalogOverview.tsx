@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
 import { supabase, rawUpdate } from '@/lib/supabase'
+import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureItem, FurnitureCategory, FurnitureVariant, ItemStatus } from '@/types'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
@@ -216,7 +217,7 @@ export default function CatalogOverview() {
 
       {/* Items list */}
       {isLoading ? (
-        <p className="catalog-loading">{t('admin.catalogOverview.loading')}</p>
+        <AdminListSkeleton rows={5} />
       ) : filteredItems.length === 0 ? (
         <div className="catalog-empty">
           <Package size={32} strokeWidth={1.5} />

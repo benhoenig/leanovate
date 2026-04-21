@@ -7,6 +7,8 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import NewProjectModal from '@/components/NewProjectModal'
 import LanguageToggle from '@/components/LanguageToggle'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { useDelayedTrue } from '@/hooks/useDelayedTrue'
 import type { Project } from '@/types'
 
 function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
@@ -57,6 +59,7 @@ export default function DashboardPage() {
   const { profile, signOut } = useAuthStore()
   const { projects, isLoading, loadProjects } = useProjectStore()
   const { activeModal, openModal } = useUIStore()
+  const showSkeleton = useDelayedTrue(isLoading && projects.length === 0)
 
   useEffect(() => {
     loadProjects()
@@ -108,10 +111,28 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {isLoading ? (
-          <div className="dashboard-loading">
-            <p className="loading-hint">{t('dashboard.loadingProjects')}</p>
-          </div>
+        {isLoading && projects.length === 0 ? (
+          showSkeleton ? (
+            <div className="projects-grid">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="project-card">
+                  <div className="project-card-body">
+                    <div className="project-card-top">
+                      <Skeleton width={8} height={8} radius={4} />
+                      <Skeleton width={50} height={10} />
+                    </div>
+                    <Skeleton width="70%" height={14} style={{ marginBottom: 6 }} />
+                    <Skeleton width="95%" height={11} style={{ marginBottom: 4 }} />
+                    <Skeleton width="85%" height={11} style={{ marginBottom: 8 }} />
+                    <Skeleton width="40%" height={10} />
+                  </div>
+                  <div className="project-card-footer">
+                    <Skeleton width={60} height={24} radius={6} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null
         ) : projects.length === 0 ? (
           <div className="dashboard-empty">
             <div className="empty-icon">

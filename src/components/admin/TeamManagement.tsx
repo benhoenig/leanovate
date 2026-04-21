@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { UserPlus, Shield, User, Trash2, AlertCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
+import AdminListSkeleton from './AdminListSkeleton'
 import type { Profile, UserRole } from '@/types'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
@@ -123,7 +124,7 @@ export default function TeamManagement() {
   }
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.team.loading')}</p>
+    return <AdminListSkeleton rows={3} />
   }
 
   return (

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link2, AlertTriangle, CheckCircle, HelpCircle, RefreshCw, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureVariant } from '@/types'
 
 interface VariantWithItemName extends FurnitureVariant {
@@ -102,7 +103,7 @@ export default function LinkHealthOverview() {
   )
 
   if (isLoading) {
-    return <p style={{ color: 'var(--color-text-secondary)', fontSize: 13, padding: 20 }}>{t('admin.linkHealth.loading')}</p>
+    return <AdminListSkeleton rows={4} />
   }
 
   return (
