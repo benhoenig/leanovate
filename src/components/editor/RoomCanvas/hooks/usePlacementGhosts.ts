@@ -75,6 +75,7 @@ export function usePlacementGhosts(
         scale_factor: 1,
         sort_order: 0,
         art_id: null,
+        light_settings: null,
         created_at: '',
       }
       const category = catalog.categories.find((c) => c.id === item.category_id)
@@ -86,6 +87,9 @@ export function usePlacementGhosts(
         flatOrientation: category?.flat_orientation ?? 'horizontal',
         artUrl: null,
         matOpeningCm: item.mat_opening_cm,
+        emitsLight: category?.emits_light ?? false,
+        mountType: category?.mount_type ?? 'floor',
+        lightSettings: null,  // ghost uses default light settings
       })
       // Make it translucent once the async loader resolves
       loader().then(() => {

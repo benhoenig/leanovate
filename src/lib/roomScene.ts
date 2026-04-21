@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getVertices, polygonCentroid } from './roomGeometry'
 import { rawStorageDownload } from './supabase'
-import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture, CurtainStyle, FlatOrientation, RoomLightingFinish, LightingPreset } from '@/types'
+import type { Room, FinishMaterial, RoomDoor, RoomWindow, FurnitureVariant, FurnitureItem, PlacedFurniture, CurtainStyle, FlatOrientation, PlacedLightSettings, LightingPreset } from '@/types'
 
 // ── Finish color resolution ──────────────────────────────────────────────────
 
@@ -662,14 +662,8 @@ export function buildCurtain(args: {
 
 // ── Lighting ─────────────────────────────────────────────────────────────────
 
-/**
- * Default lighting settings for rooms where `finishes.lighting` is absent or
- * was written before the richer shape existed. `resolveLightingSettings`
- * fills in whichever fields are missing.
- */
-export const DEFAULT_LIGHTING: RoomLightingFinish = {
-  material_id: null,
-  custom_url: null,
+/** Default per-instance settings when `placed_furniture.light_settings` is null. */
+export const DEFAULT_LIGHT_SETTINGS: PlacedLightSettings = {
   enabled: true,
   preset: 'warm',
   temperature_k: 2700,
@@ -683,18 +677,16 @@ export const LIGHTING_PRESETS: Record<Exclude<LightingPreset, 'custom'>, { tempe
   cool:    { temperature_k: 5000, intensity: 0.9 },
 }
 
-/** Fill missing fields on a room's lighting finish with defaults. */
-export function resolveLightingSettings(
-  finish: Partial<RoomLightingFinish> | null | undefined,
-): RoomLightingFinish {
-  if (!finish) return { ...DEFAULT_LIGHTING }
+/** Fill missing fields with defaults (also handles the null-row case). */
+export function resolveLightSettings(
+  settings: Partial<PlacedLightSettings> | null | undefined,
+): PlacedLightSettings {
+  if (!settings) return { ...DEFAULT_LIGHT_SETTINGS }
   return {
-    material_id:   finish.material_id   ?? null,
-    custom_url:    finish.custom_url    ?? null,
-    enabled:       finish.enabled       ?? DEFAULT_LIGHTING.enabled,
-    preset:        finish.preset        ?? DEFAULT_LIGHTING.preset,
-    temperature_k: finish.temperature_k ?? DEFAULT_LIGHTING.temperature_k,
-    intensity:     finish.intensity     ?? DEFAULT_LIGHTING.intensity,
+    enabled:       settings.enabled       ?? DEFAULT_LIGHT_SETTINGS.enabled,
+    preset:        settings.preset        ?? DEFAULT_LIGHT_SETTINGS.preset,
+    temperature_k: settings.temperature_k ?? DEFAULT_LIGHT_SETTINGS.temperature_k,
+    intensity:     settings.intensity     ?? DEFAULT_LIGHT_SETTINGS.intensity,
   }
 }
 
@@ -757,38 +749,24 @@ export function setStudioLightsEnabled(refs: StudioLightingRefs, on: boolean): v
   refs.fill.visible = on
 }
 
-// ── Ceiling fixture ──────────────────────────────────────────────────────────
+// ── Placed-furniture light fixtures (ceiling downlights, lamps) ──────────────
 
-export interface CeilingFixtureRefs {
-  /** Group positioned at room centroid at ceiling height. */
-  group: THREE.Group
-  spot: THREE.SpotLight
-  target: THREE.Object3D
-  /** Visible luminaire mesh — mutable via `rebuildFixtureMesh` when style changes. */
-  mesh: THREE.Object3D
-}
-
-type FixtureKind = 'recessed' | 'pendant'
+export type FixtureKind = 'recessed' | 'pendant'
 
 /**
- * Picks the fixture shape from the selected lighting material's thumbnail
- * filename convention: `/textures/lighting/{kind}.png`. Unknown → recessed.
+ * Picks the fixture shape from the item name. Seeded items are
+ * "Recessed Downlight" and "Pendant Sphere"; anything unknown falls back
+ * to recessed. Designers naming custom items should follow the convention.
  */
-function fixtureKindFromMaterial(
-  materialId: string | null,
-  finishMaterials: FinishMaterial[],
-): FixtureKind {
-  if (!materialId) return 'recessed'
-  const mat = finishMaterials.find((m) => m.id === materialId)
-  if (!mat) return 'recessed'
-  const path = mat.thumbnail_path.toLowerCase()
-  if (path.includes('pendant')) return 'pendant'
-  return 'recessed'
+export function fixtureKindFromItem(item: FurnitureItem | null | undefined): FixtureKind {
+  if (!item) return 'recessed'
+  return item.name.toLowerCase().includes('pendant') ? 'pendant' : 'recessed'
 }
 
-function buildFixtureMesh(kind: FixtureKind): THREE.Group {
+/** Procedural luminaire mesh. No .glb, no TRELLIS cost. */
+export function buildFixtureMesh(kind: FixtureKind): THREE.Group {
   const g = new THREE.Group()
-  g.name = `ceiling-fixture-${kind}`
+  g.name = `light-fixture-${kind}`
   if (kind === 'pendant') {
     // Thin cord drops 30cm from ceiling, globe bulb hangs below.
     const cord = new THREE.Mesh(
@@ -832,42 +810,61 @@ function buildFixtureMesh(kind: FixtureKind): THREE.Group {
   return g
 }
 
+export interface LightFixtureRefs {
+  /** Parent group to attach to the placed-item's Three.js group. */
+  group: THREE.Group
+  /** SpotLight (ceiling-mount) or PointLight (other mount types). */
+  light: THREE.SpotLight | THREE.PointLight
+  /** SpotLight needs a child target; null for PointLight. */
+  target: THREE.Object3D | null
+  /** Visible luminaire mesh — driven by the item, not mutated after build. */
+  mesh: THREE.Object3D
+}
+
 /**
- * Adds a visible ceiling luminaire + SpotLight at room centroid. Mutable in
- * place via `applyCeilingFixtureSettings` (fast — safe on every slider tick)
- * and `rebuildFixtureMesh` (when the fixture style changes).
+ * Builds a procedural light fixture (luminaire mesh + Three.js light) as a
+ * local group, to be attached to a placed-furniture group by the caller.
+ *
+ *   mount_type='ceiling' → SpotLight pointing straight down
+ *   anything else        → PointLight (omnidirectional, for lamps)
+ *
+ * Settings (enabled/temp/intensity) applied via `applyLightSettings`.
  */
-export function addCeilingFixture(
-  scene: THREE.Object3D,
-  room: Room,
-  settings: RoomLightingFinish,
-  finishMaterials: FinishMaterial[],
-): CeilingFixtureRefs {
-  const vertices = getVertices(room)
-  const centroid = polygonCentroid(vertices)
-  const ceilingH = (room.ceiling_height_cm ?? 260) / 100
-
+export function buildLightFixture(
+  kind: FixtureKind,
+  mountType: 'floor' | 'wall' | 'ceiling',
+  settings: PlacedLightSettings,
+): LightFixtureRefs {
   const group = new THREE.Group()
-  group.name = 'ceiling-fixture'
-  group.position.set(centroid.u, ceilingH, centroid.v)
-  scene.add(group)
+  group.name = `light-${mountType}-${kind}`
 
-  const mesh = buildFixtureMesh(fixtureKindFromMaterial(settings.material_id, finishMaterials))
+  const mesh = buildFixtureMesh(kind)
   group.add(mesh)
 
-  // SpotLight points straight down. Positioned just below the luminaire to
-  // avoid self-shadowing the fixture mesh.
-  const spot = new THREE.SpotLight(0xffffff, 0, 0, Math.PI / 3, 0.5, 1.2)
-  spot.position.set(0, -0.05, 0)
-  spot.castShadow = false  // shadows from SpotLights are expensive; skip for MVP
-  const target = new THREE.Object3D()
-  target.position.set(0, -1, 0)
-  group.add(target)
-  group.add(spot)
-  spot.target = target
+  let light: THREE.SpotLight | THREE.PointLight
+  let target: THREE.Object3D | null = null
 
-  const refs: CeilingFixtureRefs = { group, spot, target, mesh }
-  applyCeilingFixtureSettings(refs, settings)
+  if (mountType === 'ceiling') {
+    const spot = new THREE.SpotLight(0xffffff, 0, 0, Math.PI / 3, 0.5, 1.2)
+    spot.position.set(0, -0.05, 0)
+    spot.castShadow = false  // shadows from SpotLights are expensive; skip for MVP
+    target = new THREE.Object3D()
+    target.position.set(0, -1, 0)
+    group.add(target)
+    group.add(spot)
+    spot.target = target
+    light = spot
+  } else {
+    // Floor lamps / table lamps emit omnidirectionally.
+    const point = new THREE.PointLight(0xffffff, 0, 6, 1.5)
+    point.position.set(0, 0, 0)
+    point.castShadow = false
+    group.add(point)
+    light = point
+  }
+
+  const refs: LightFixtureRefs = { group, light, target, mesh }
+  applyLightSettings(refs, settings)
   return refs
 }
 
@@ -876,16 +873,16 @@ export function addCeilingFixture(
  * every slider tick. The fixture mesh stays visible when `enabled=false` (a
  * turned-off lamp is still a lamp) but its emissive glow goes to zero.
  */
-export function applyCeilingFixtureSettings(
-  refs: CeilingFixtureRefs,
-  settings: RoomLightingFinish,
+export function applyLightSettings(
+  refs: LightFixtureRefs,
+  settings: PlacedLightSettings,
 ): void {
   const on = settings.enabled
   const color = kelvinToRgb(settings.temperature_k)
-  // SpotLight intensity 1.0 reads dim at room scale; ×6 puts the 0–1 slider in
-  // "dim-to-living-room-bright" range. Tune empirically if scenes feel washed out.
-  refs.spot.intensity = on ? settings.intensity * 6 : 0
-  refs.spot.color.copy(color)
+  // Three.js legacy intensity 1.0 reads dim at room scale; ×6 puts the 0–1
+  // slider in "dim-to-living-room-bright" range. Tune empirically.
+  refs.light.intensity = on ? settings.intensity * 6 : 0
+  refs.light.color.copy(color)
 
   refs.mesh.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
@@ -898,14 +895,8 @@ export function applyCeilingFixtureSettings(
   })
 }
 
-/** Swaps the luminaire mesh when `material_id` (fixture style) changes. */
-export function rebuildFixtureMesh(
-  refs: CeilingFixtureRefs,
-  materialId: string | null,
-  finishMaterials: FinishMaterial[],
-): CeilingFixtureRefs {
-  const kind = fixtureKindFromMaterial(materialId, finishMaterials)
-  refs.group.remove(refs.mesh)
+/** Tears down a fixture: disposes the luminaire mesh + detaches the light. */
+export function disposeLightFixture(refs: LightFixtureRefs): void {
   refs.mesh.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose()
@@ -913,10 +904,8 @@ export function rebuildFixtureMesh(
       else obj.material.dispose()
     }
   })
-  const newMesh = buildFixtureMesh(kind)
-  refs.group.add(newMesh)
-  refs.mesh = newMesh
-  return refs
+  const parent = refs.group.parent
+  if (parent) parent.remove(refs.group)
 }
 
 // ── Furniture (.glb) loading + caching ───────────────────────────────────────
@@ -1184,6 +1173,15 @@ export interface FurnitureMeshParams {
   artUrl?: string | null
   /** Mat opening (inner art area) in cm. Required to render the art overlay. */
   matOpeningCm?: { w: number; h: number } | null
+  /**
+   * True when the item's category is a light source (ceiling downlight / lamp).
+   * Overrides the normal flat/.glb render path — builds a procedural luminaire
+   * + Three.js light. `mountType` decides SpotLight vs PointLight; `lightSettings`
+   * drives color/intensity/enabled.
+   */
+  emitsLight?: boolean
+  mountType?: 'floor' | 'wall' | 'ceiling'
+  lightSettings?: PlacedLightSettings | null
 }
 
 /**
@@ -1196,7 +1194,11 @@ export function createFurnitureGroup(params: FurnitureMeshParams): {
   group: THREE.Group
   loader: () => Promise<void>
 } {
-  const { placed, variant, item, isFlat, flatOrientation = 'horizontal', artUrl, matOpeningCm } = params
+  const {
+    placed, variant, item, isFlat, flatOrientation = 'horizontal',
+    artUrl, matOpeningCm,
+    emitsLight = false, mountType = 'floor', lightSettings,
+  } = params
 
   const widthM = (variant.width_cm ?? item.width_cm ?? 50) / 100
   const depthM = (variant.depth_cm ?? item.depth_cm ?? 50) / 100
@@ -1211,6 +1213,21 @@ export function createFurnitureGroup(params: FurnitureMeshParams): {
   // Position: room-local cm → metres. y=0 is the floor.
   group.position.set(placed.x_cm / 100, placed.y_cm / 100, placed.z_cm / 100)
   group.rotation.y = (placed.rotation_deg * Math.PI) / 180
+
+  // Light-emitting items render synchronously from procedural geometry —
+  // no .glb fetch, no TRELLIS. Attach the fixture + light to the group and
+  // skip the async loader branches below.
+  if (emitsLight) {
+    const kind = fixtureKindFromItem(item)
+    const resolvedSettings = resolveLightSettings(lightSettings)
+    const refs = buildLightFixture(kind, mountType, resolvedSettings)
+    group.add(refs.group)
+    group.userData.light = refs
+    return {
+      group,
+      loader: async () => {},
+    }
+  }
 
   const loader = async () => {
     try {

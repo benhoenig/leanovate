@@ -5,9 +5,11 @@ import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useArtStore } from '@/stores/useArtStore'
 import PlacementSection from './PlacementSection'
+import PlacedLightingSection from './PlacedLightingSection'
 import ArtPickerModal from '../ArtPickerModal'
+import type { PlacedLightSettings } from '@/types'
 
-export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number; art_id: string | null; y_cm: number } }) {
+export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number; art_id: string | null; y_cm: number; light_settings: PlacedLightSettings | null } }) {
   const { t } = useTranslation()
   const { rotateItem, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem, setArt, setItemHeight } = useCanvasStore()
   const { getArtById, getArtUrl } = useArtStore()
@@ -219,6 +221,14 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
           </div>
           <div className="panel-divider" />
         </>
+      )}
+
+      {/* Light-emitting fixture (ceiling downlight / lamp) — per-instance settings */}
+      {category?.emits_light && (
+        <PlacedLightingSection
+          placedId={placed.id}
+          settings={placed.light_settings}
+        />
       )}
 
       {/* Placement controls — edit the master item/variant, not just this instance */}

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type * as THREE from 'three'
 import { getVertices, pointInPolygon, nearestPointOnPolygon, nearestWallSnap } from '@/lib/roomGeometry'
 import { useCanvasStore } from '@/stores/useCanvasStore'
+import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import type { Room, RoomGeometry } from '@/types'
@@ -401,7 +402,11 @@ export function useCanvasInteractions(
           const snap = !e.ctrlKey && !e.metaKey
           const xCm = snapCm(hit.x * 100, step, !snap)
           const zCm = snapCm(hit.z * 100, step, !snap)
-          ghostRefs.ghostGroupRef.current.position.set(xCm / 100, 0, zCm / 100)
+          // Ceiling-mount items hang from the ceiling, not the floor.
+          const item = useCatalogStore.getState().items.find((i) => i.id === s.placementItemId)
+          const cat = useCatalogStore.getState().categories.find((c) => c.id === item?.category_id)
+          const yM = cat?.mount_type === 'ceiling' ? (room.ceiling_height_cm ?? 260) / 100 : 0
+          ghostRefs.ghostGroupRef.current.position.set(xCm / 100, yM, zCm / 100)
         }
       }
 

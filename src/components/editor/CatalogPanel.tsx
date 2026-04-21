@@ -100,21 +100,24 @@ export default function CatalogPanel() {
   }, [filteredItems, isLoading, loadVariantsForItem])
 
   // ─── Visible items (hide wall-mount categories — they live in Fixtures tab) ─
+  //     Ceiling lights show here alongside floor items — they're placed on
+  //     the X/Z grid like regular furniture, just with Y auto-snapped to the
+  //     ceiling. Only the wall-constrained (door/window) tab lives separately.
 
-  const floorCategoryIds = new Set(
-    categories.filter((c) => (c.mount_type ?? 'floor') === 'floor').map((c) => c.id),
+  const catalogCategoryIds = new Set(
+    categories.filter((c) => (c.mount_type ?? 'floor') !== 'wall').map((c) => c.id),
   )
-  const floorFilteredItems = filteredItems.filter((i) => floorCategoryIds.has(i.category_id))
+  const catalogFilteredItems = filteredItems.filter((i) => catalogCategoryIds.has(i.category_id))
 
   const displayItems =
     adminFilter === 'pending' && profile?.role === 'admin'
-      ? floorFilteredItems.filter((i) => i.status === 'pending')
-      : floorFilteredItems
+      ? catalogFilteredItems.filter((i) => i.status === 'pending')
+      : catalogFilteredItems
 
-  const visibleCategories = categories.filter((c) => (c.mount_type ?? 'floor') === 'floor')
+  const visibleCategories = categories.filter((c) => (c.mount_type ?? 'floor') !== 'wall')
   const pendingApprovalVariants = getPendingRenderApprovalVariants()
   const hiddenCount = items.filter(
-    (i) => i.hidden_at != null && floorCategoryIds.has(i.category_id),
+    (i) => i.hidden_at != null && catalogCategoryIds.has(i.category_id),
   ).length
 
   // ─── Handlers ─────────────────────────────────────────────────────────────

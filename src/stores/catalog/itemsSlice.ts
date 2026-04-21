@@ -298,10 +298,15 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
   },
 
   isItemArchitectural: (itemId) => {
+    // Architectural = rendered from procedural geometry, not a TRELLIS-generated
+    // .glb. Currently covers wall fixtures (doors/windows) and ceiling lights
+    // (luminaire mesh + SpotLight). Any new `mount_type` that renders procedurally
+    // should be added here so `createVariant` + `retryRender` keep skipping TRELLIS.
     const { items, categories } = get()
     const item = items.find((i) => i.id === itemId)
     if (!item) return false
     const cat = categories.find((c) => c.id === item.category_id)
-    return cat?.mount_type === 'wall'
+    if (!cat) return false
+    return cat.mount_type === 'wall' || cat.mount_type === 'ceiling' || cat.emits_light
   },
 })

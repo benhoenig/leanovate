@@ -7,8 +7,8 @@
  *
  *   - useThreeScene         renderer, camera, OrbitControls, render loop
  *   - useRoomShell          floor/walls/ceiling (rebuilt per change)
- *   - useRoomLighting       studio rig + ceiling fixture (persistent, mutable)
- *   - useFurnitureLayer     placed furniture ↔ scene graph sync
+ *   - useRoomLighting       studio fill rig (persistent, mutable)
+ *   - useFurnitureLayer     placed furniture ↔ scene graph sync (includes per-item light fixtures)
  *   - useSelectionRing      selection ring + per-frame follow
  *   - usePlacementGhosts    furniture + fixture placement ghosts
  *   - useShapeHandles       vertex + midpoint handles in Edit Shape mode
@@ -41,7 +41,7 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
 
   const ctx = useThreeScene(room)
   useRoomShell(ctx, room, finishMaterials)
-  useRoomLighting(ctx, room, finishMaterials)
+  useRoomLighting(ctx, room)
   useFurnitureLayer(ctx)
   useSelectionRing(ctx)
   const ghostRefs = usePlacementGhosts(ctx, room.id)

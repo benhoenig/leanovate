@@ -86,7 +86,7 @@ export default function RoomProperties({ room, updateRoom, t }: {
         )}
       </div>
 
-      <LightingControls room={room} updateRoom={updateRoom} />
+      <LightingControls />
 
       {((geo.doors?.length ?? 0) > 0 || (geo.windows?.length ?? 0) > 0 || fixturePlacementType) && (
         <>

@@ -12,14 +12,14 @@ export type RenderApprovalStatus = 'pending' | 'approved' | 'rejected'
 export type LinkStatus = 'active' | 'inactive' | 'unchecked'
 export type BlockSize = 'big' | 'small'
 export type ProjectStatus = 'draft' | 'completed'
-// NOTE: door/window are no longer finish types — doors and windows are placed
-// individually as fixtures (see FixturePickerPanel + placed_furniture). The
-// DB enum still has them for historical rows but the app never writes new
-// ones. Lighting stays as a type placeholder for the deferred ceiling-light
-// feature (hidden from the UI for now).
-export type FinishType = 'wall' | 'floor' | 'lighting'
+// NOTE: door/window are no longer finish types — those are placed fixtures.
+// Lighting was briefly a finish (Phase A, centroid fixture per room) but is
+// now placed furniture with `mount_type='ceiling'` + `emits_light=true`. The
+// DB enum keeps the historical values for old rows; the app never writes
+// `'lighting'` as a FinishType anymore.
+export type FinishType = 'wall' | 'floor'
 export type CurtainStyle = 'none' | 'open' | 'closed'
-export type MountType = 'floor' | 'wall'
+export type MountType = 'floor' | 'wall' | 'ceiling'
 export type FlatOrientation = 'horizontal' | 'vertical'
 export type ArtScope = 'private' | 'team'
 
@@ -53,15 +53,14 @@ export interface Project {
 export type LightingPreset = 'warm' | 'neutral' | 'cool' | 'custom'
 
 /**
- * Ceiling-light settings stored per room (JSONB, no column migration needed).
- * `material_id` picks the fixture style (see `finish_materials` WHERE type='lighting').
- * Presets set temperature + intensity; moving a slider flips `preset` to 'custom'
- * but keeps the values. `enabled=false` is "Off" — light is skipped at render time
- * but settings are preserved so toggling back restores the last state.
+ * Per-instance lighting settings stored on `placed_furniture.light_settings`
+ * for items whose category `emits_light = true`. Presets set
+ * temperature_k + intensity in one go; moving a slider flips `preset` to
+ * 'custom' but keeps the values. `enabled=false` = "Off" — light is skipped
+ * at render time but settings are preserved so toggling back restores state.
+ * Null on the row → renderer uses warm defaults (see `DEFAULT_LIGHT_SETTINGS`).
  */
-export interface RoomLightingFinish {
-  material_id: string | null
-  custom_url: string | null
+export interface PlacedLightSettings {
   enabled: boolean
   preset: LightingPreset
   temperature_k: number   // 2200–6500
@@ -71,7 +70,6 @@ export interface RoomLightingFinish {
 export interface RoomFinishes {
   wall?: { material_id: string | null; custom_url: string | null }
   floor?: { material_id: string | null; custom_url: string | null }
-  lighting?: RoomLightingFinish
 }
 
 // --- Room Geometry (polygon vertices + doors/windows on walls) ---
@@ -140,12 +138,23 @@ export interface FurnitureCategory {
   sort_order: number
   is_flat: boolean
   default_block_size: BlockSize
-  /** 'floor' = normal furniture (X/Z grid placement); 'wall' = door/window (wall-attached). */
+  /**
+   * 'floor'   — normal furniture (X/Z grid placement, Y=0)
+   * 'wall'    — door/window (wall-attached, uses wall_index + position)
+   * 'ceiling' — ceiling light (X/Z grid placement, Y auto-snaps to ceilingH)
+   */
   mount_type: MountType
   /** 'horizontal' = rug-style plane on floor; 'vertical' = upright plane (picture frame). Only meaningful when is_flat=true. */
   flat_orientation: FlatOrientation
   /** True when items in this category are picture-frame style (designer picks art to fill the mat opening). */
   accepts_art: boolean
+  /**
+   * True when items in this category act as light sources — the renderer
+   * attaches a SpotLight (mount_type='ceiling') or PointLight (mount_type='floor')
+   * to each placed instance, driven by `placed_furniture.light_settings`.
+   * Implies TRELLIS bypass (fixture mesh is procedural, no .glb needed).
+   */
+  emits_light: boolean
 }
 
 export interface Style {
@@ -222,6 +231,8 @@ export interface PlacedFurniture {
   sort_order: number
   /** Art image to render inside the frame's mat opening. Null = empty frame. Only meaningful when the furniture_item is a picture frame (category.accepts_art). */
   art_id: string | null
+  /** Per-instance light settings (enabled/preset/temperature_k/intensity). Only meaningful when category.emits_light. Null → warm defaults. */
+  light_settings: PlacedLightSettings | null
   created_at: string
 }
 

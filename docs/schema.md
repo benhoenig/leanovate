@@ -67,6 +67,12 @@ CREATE TYPE flat_orientation AS ENUM ('horizontal', 'vertical');
 -- Visibility scope for designer-uploaded art images used inside picture frames.
 -- 'private' = only the uploader, 'team' = everyone on the team.
 CREATE TYPE art_scope AS ENUM ('private', 'team');
+
+-- How items in a category attach to the room. 'floor' = normal X/Z grid
+-- placement (Y=0). 'wall' = door/window (uses wall_index + position, Y
+-- derived from wall height). 'ceiling' = ceiling light (X/Z grid, Y auto-
+-- snaps to room.ceiling_height_cm at placement).
+CREATE TYPE mount_type AS ENUM ('floor', 'wall', 'ceiling');
 ```
 
 ---
@@ -124,7 +130,7 @@ Individual rooms within a project's unit.
 | width_cm | integer | NOT NULL | Room width |
 | height_cm | integer | NOT NULL | Room depth |
 | geometry | jsonb | NOT NULL, default '{}' | Wall segments, door positions, window positions. Consumed by PixiJS canvas as one object. Structure: `{ "walls": [...], "doors": [...], "windows": [...] }` |
-| finishes | jsonb | NOT NULL, default '{}' | Current finish selections. Wall + floor entries: `{ "material_id": "uuid", "custom_url": null }`. Lighting entry (ceiling fixture): `{ "material_id": "uuid\|null", "custom_url": null, "enabled": boolean, "preset": "warm\|neutral\|cool\|custom", "temperature_k": int 2200–6500, "intensity": float 0–1 }` — `material_id` picks the fixture style, the other four knobs drive the SpotLight. Moving a slider flips `preset` to `"custom"` but keeps the values. `resolveLightingSettings()` fills in missing fields for rows written before the richer shape. Door/window entries are no longer written — those are placed fixtures. |
+| finishes | jsonb | NOT NULL, default '{}' | Current finish selections. Only wall + floor now: `{ "material_id": "uuid", "custom_url": null }`. Door/window/lighting entries are no longer written — those are all placed fixtures (ceiling lights via `furniture_categories.emits_light` + `placed_furniture.light_settings`; doors/windows via `rooms.geometry.doors[]/windows[]`). |
 | sort_order | integer | NOT NULL, default 0 | Display order in the room list |
 | preview_image_url | text | nullable | Most recently saved eye-level interior vignette (3D perspective preview). Stored in `thumbnails` bucket. Updated each time designer renders a preview and clicks "Save to Project". Null until first save. |
 | created_at | timestamptz | NOT NULL, default now() | |
@@ -149,6 +155,8 @@ Top-level groupings for the furniture catalog.
 | default_block_size | block_size | NOT NULL, default 'big' | Grid size for furniture placement snap. Seeded Small for Chair, Lamp, Side Table, Coffee Table, Picture Frame; Big for everything else. See `src/lib/blockGrid.ts`. |
 | flat_orientation | flat_orientation | NOT NULL, default 'horizontal' | Only read when `is_flat=true`. 'horizontal' = rug-style plane laid on the floor. 'vertical' = upright plane (picture frames, wall art). Seeded 'vertical' for `Picture Frame`. |
 | accepts_art | boolean | NOT NULL, default false | If true, items in this category are picture-frame style — the designer picks art from the art library to fill the mat opening. Seeded true for `Picture Frame`. |
+| mount_type | mount_type | NOT NULL, default 'floor' | `'floor'` = normal furniture (X/Z grid). `'wall'` = door/window (wall_index + position). `'ceiling'` = ceiling light (X/Z grid, Y auto-snaps to `room.ceiling_height_cm` at placement). Seeded `'ceiling'` for `Ceiling Light`. |
+| emits_light | boolean | NOT NULL, default false | If true, placed items attach a Three.js light (SpotLight for `mount_type='ceiling'`, PointLight otherwise) driven by `placed_furniture.light_settings`. Implies TRELLIS bypass (fixture mesh is procedural). Seeded true for `Ceiling Light`. |
 
 #### styles
 
@@ -258,6 +266,7 @@ Instances of furniture items placed in a room. Coordinates are room-local cm.
 | scale_factor | float | NOT NULL, default 1 | Per-instance size multiplier applied on top of variant dimensions |
 | sort_order | integer | NOT NULL, default 0 | Not used by the 3D canvas (retained for backwards compat) |
 | art_id | uuid | FK → art_library.id ON DELETE SET NULL, nullable | Art image rendered inside the frame's mat. Only meaningful for picture-frame items (category.accepts_art = true). Null = empty frame (shows just the frame product photo with the grey/white mat visible). On art deletion the frame silently reverts to empty instead of orphaning the reference. |
+| light_settings | jsonb | nullable | Per-instance lighting settings for items whose `category.emits_light = true`. Shape: `{ "enabled": bool, "preset": "warm\|neutral\|cool\|custom", "temperature_k": int 2200–6500, "intensity": float 0–1 }`. Null → renderer falls back to warm defaults (2700K, 70%). Moving a slider flips `preset → 'custom'` but keeps the values; the "Off" preset sets `enabled=false`. |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `room_id`, `furniture_item_id`

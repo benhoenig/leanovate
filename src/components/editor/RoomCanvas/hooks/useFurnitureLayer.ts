@@ -51,12 +51,20 @@ export function useFurnitureLayer(ctx: SceneContext): void {
       isFlat: boolean,
       flatOrientation: 'horizontal' | 'vertical',
       artUrl: string | null,
+      emitsLight: boolean,
+      mountType: string,
     ): string {
       const w = variant.width_cm ?? item.width_cm ?? 50
       const d = variant.depth_cm ?? item.depth_cm ?? 50
       const h = variant.height_cm ?? item.height_cm ?? 50
       const glb = isFlat ? `flat:${flatOrientation}` : variant.glb_path ?? 'placeholder'
-      return `${pf.selected_variant_id}|${w}|${d}|${h}|${glb}|${pf.scale_factor ?? 1}|${artUrl ?? 'no-art'}`
+      // Light-emitting items rebuild on any settings change. Cheap since the
+      // fixture mesh is procedural + no .glb fetch. If slider-drag cost ever
+      // bites, swap this for an in-place applyLightSettings on a refs map.
+      const lightSig = emitsLight
+        ? `light:${mountType}:${JSON.stringify(pf.light_settings ?? 'default')}`
+        : 'no-light'
+      return `${pf.selected_variant_id}|${w}|${d}|${h}|${glb}|${pf.scale_factor ?? 1}|${artUrl ?? 'no-art'}|${lightSig}`
     }
 
     function disposeGroup(group: THREE.Group) {
@@ -91,10 +99,12 @@ export function useFurnitureLayer(ctx: SceneContext): void {
         const isFlat = catalog.isItemFlat(item.id)
         const category = catalog.categories.find((c) => c.id === item.category_id)
         const flatOrientation = category?.flat_orientation ?? 'horizontal'
+        const emitsLight = category?.emits_light ?? false
+        const mountType = category?.mount_type ?? 'floor'
         const artRow = art.getArtById(pf.art_id)
         const artUrl = artRow ? art.getArtUrl(artRow) : null
 
-        const sig = signature(pf, variant, item, isFlat, flatOrientation, artUrl)
+        const sig = signature(pf, variant, item, isFlat, flatOrientation, artUrl, emitsLight, mountType)
         const currentGroup = existing.get(pf.id)
         const currentSig = signatures.get(pf.id)
 
@@ -118,6 +128,9 @@ export function useFurnitureLayer(ctx: SceneContext): void {
           flatOrientation,
           artUrl,
           matOpeningCm: item.mat_opening_cm,
+          emitsLight,
+          mountType,
+          lightSettings: pf.light_settings,
         })
         layer.add(group)
         existing.set(pf.id, group)

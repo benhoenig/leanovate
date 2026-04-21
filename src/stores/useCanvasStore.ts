@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import type { PlacedFurniture, RoomGeometry } from '@/types'
-import { supabase, rawInsert, rawInsertMany, rawUpdate, rawDelete, rawDeleteWhere } from '@/lib/supabase'
+import type { PlacedFurniture, PlacedLightSettings, RoomGeometry } from '@/types'
+import { rawSelect, rawInsert, rawInsertMany, rawUpdate, rawDelete, rawDeleteWhere } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 
@@ -17,6 +17,22 @@ interface GeometryCommand { type: 'geometry'; roomId: string; prevGeometry: Room
 type CanvasCommand = PlaceCommand | RemoveCommand | MoveCommand | RotateCommand | ScaleCommand | SwitchVariantCommand | GeometryCommand
 
 const MAX_HISTORY = 50
+
+/**
+ * Default vertical offset for a newly-placed item, based on category.mount_type:
+ *   'ceiling' → room.ceiling_height_cm (fixture hangs from ceiling)
+ *    anything else → 0 (resting on floor)
+ */
+function defaultYcmForMount(roomId: string, itemId: string): number {
+  const item = useCatalogStore.getState().items.find((i) => i.id === itemId)
+  if (!item) return 0
+  const cat = useCatalogStore.getState().categories.find((c) => c.id === item.category_id)
+  if (cat?.mount_type === 'ceiling') {
+    const room = useProjectStore.getState().rooms.find((r) => r.id === roomId)
+    return room?.ceiling_height_cm ?? 260
+  }
+  return 0
+}
 
 interface CanvasState {
   // ─ Data ─────────────────────────────────────────────────────────────────
@@ -70,6 +86,8 @@ interface CanvasState {
   scaleItem: (id: string, scaleFactor: number) => void
   /** Set the vertical offset (y_cm) in room-local cm. 0 = resting on floor; positive = lifted / wall-hung. */
   setItemHeight: (id: string, yCm: number) => void
+  /** Update per-instance light settings for a placed fixture (ceiling downlight / lamp). */
+  updateLightSettings: (id: string, patch: Partial<PlacedLightSettings>) => void
   switchVariant: (id: string, variantId: string, price: number | null) => void
   /** Set the art image on a placed picture frame. Pass null to clear (empty frame). */
   setArt: (id: string, artId: string | null) => Promise<{ error: string | null }>
@@ -138,16 +156,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // ─── Load / Save ──────────────────────────────────────────────────────────
 
   loadPlacedFurniture: async (roomId) => {
-    const { data, error } = await supabase
-      .from('placed_furniture')
-      .select('*')
-      .eq('room_id', roomId)
-      .order('sort_order', { ascending: true })
-    if (error) {
+    const { data, error } = await rawSelect<PlacedFurniture>(
+      'placed_furniture',
+      `room_id=eq.${roomId}&order=sort_order.asc`,
+    )
+    if (error || !data) {
       console.error('loadPlacedFurniture:', error)
       return
     }
-    set({ placedFurniture: data as PlacedFurniture[], selectedItemId: null, ...CLEAR_HISTORY })
+    set({ placedFurniture: data, selectedItemId: null, ...CLEAR_HISTORY })
   },
 
   savePlacedFurniture: async () => {
@@ -179,7 +196,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         furniture_item_id: item.furnitureItemId,
         selected_variant_id: item.variantId,
         x_cm: item.x_cm,
-        y_cm: 0,
+        y_cm: defaultYcmForMount(item.roomId, item.furnitureItemId),
         z_cm: item.z_cm,
         rotation_deg: item.rotation_deg,
         price_at_placement: variant?.price_thb ?? null,
@@ -235,7 +252,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       furniture_item_id: placementItemId,
       selected_variant_id: placementVariantId,
       x_cm: roomX,
-      y_cm: 0,
+      y_cm: defaultYcmForMount(roomId, placementItemId),
       z_cm: roomY,
       rotation_deg: 0,
       price_at_placement: price,
@@ -305,6 +322,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     useProjectStore.setState({ isDirty: true })
     rawUpdate('placed_furniture', id, { y_cm: clamped }).then(({ error }) => {
       if (error) console.error('setItemHeight DB:', error)
+    })
+  },
+
+  updateLightSettings: (id, patch) => {
+    const item = get().placedFurniture.find((i) => i.id === id)
+    if (!item) return
+    const next: PlacedLightSettings = {
+      enabled:       patch.enabled       ?? item.light_settings?.enabled       ?? true,
+      preset:        patch.preset        ?? item.light_settings?.preset        ?? 'warm',
+      temperature_k: patch.temperature_k ?? item.light_settings?.temperature_k ?? 2700,
+      intensity:     patch.intensity     ?? item.light_settings?.intensity     ?? 0.7,
+    }
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, light_settings: next } : i
+      ),
+    }))
+    useProjectStore.setState({ isDirty: true })
+    rawUpdate('placed_furniture', id, { light_settings: next }).then(({ error }) => {
+      if (error) console.error('updateLightSettings DB:', error)
     })
   },
 

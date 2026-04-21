@@ -43,7 +43,7 @@ Owns all three template layers: unit layout templates, furniture layout template
 
 ### 6. UI Store (`useUIStore`)
 
-Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, toast notifications, **world-grid visibility** (persisted to localStorage), **camera mode** (`design` | `roam`, session-local), and **studio lights** (design-fill rig on/off, persisted to localStorage — defaults on; designers flip off once real ceiling/lamp fixtures are configured). No business logic, no data persistence beyond the grid + studio-lights toggles.
+Owns pure visual state: which sidebar tab is active, which right panel tab is active, modal visibility, alert banners, toast notifications, **world-grid visibility** (persisted to localStorage), **camera mode** (`design` | `roam`, session-local), and **studio lights** (design-fill rig on/off — `useRoomLighting` drives ambient + sun + fill; persisted to localStorage, defaults on; designers flip off once they've placed real ceiling lights / lamps via the catalog). No business logic, no data persistence beyond the grid + studio-lights toggles. Per-instance lighting settings for placed fixtures (ceiling downlights, lamps) live on `placed_furniture.light_settings` — owned by Canvas Store, not UI Store.
 
 ---
 
