@@ -232,6 +232,8 @@ export interface PlacedFurniture {
   art_id: string | null
   /** Per-instance light settings (enabled/preset/temperature_k/intensity). Only meaningful when category.emits_light. Null → warm defaults. */
   light_settings: PlacedLightSettings | null
+  /** Horizontal mirror (scale.x = -1 at render time). Flips "handedness" for items like L-shape sofas. Orthogonal to rotation_deg. */
+  mirrored: boolean
   created_at: string
 }
 

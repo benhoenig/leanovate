@@ -112,6 +112,7 @@ export function useFurnitureLayer(ctx: SceneContext): void {
           // Only transform changed — update in place.
           currentGroup.position.set(pf.x_cm / 100, pf.y_cm / 100, pf.z_cm / 100)
           currentGroup.rotation.y = (pf.rotation_deg * Math.PI) / 180
+          currentGroup.scale.x = pf.mirrored ? -1 : 1
           continue
         }
 
@@ -132,6 +133,7 @@ export function useFurnitureLayer(ctx: SceneContext): void {
           mountType,
           lightSettings: pf.light_settings,
         })
+        if (pf.mirrored) group.scale.x = -1
         layer.add(group)
         existing.set(pf.id, group)
         signatures.set(pf.id, sig)

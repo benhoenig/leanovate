@@ -266,6 +266,7 @@ Instances of furniture items placed in a room. Coordinates are room-local cm.
 | sort_order | integer | NOT NULL, default 0 | Not used by the 3D canvas (retained for backwards compat) |
 | art_id | uuid | FK → art_library.id ON DELETE SET NULL, nullable | Art image rendered inside the frame's mat. Only meaningful for picture-frame items (category.accepts_art = true). Null = empty frame (shows just the frame product photo with the grey/white mat visible). On art deletion the frame silently reverts to empty instead of orphaning the reference. |
 | light_settings | jsonb | nullable | Per-instance lighting settings for items whose `category.emits_light = true`. Shape: `{ "enabled": bool, "preset": "warm\|neutral\|cool\|custom", "temperature_k": int 2200–6500, "intensity": float 0–1 }`. Null → renderer falls back to warm defaults (2700K, 70%). Moving a slider flips `preset → 'custom'` but keeps the values; the "Off" preset sets `enabled=false`. |
+| mirrored | boolean | NOT NULL, default false | Per-instance horizontal mirror. `useFurnitureLayer` applies `group.scale.x = mirrored ? -1 : 1` at render time to flip "handedness" for items like L-shape sectionals, handed desks. Orthogonal to `rotation_deg` — flipping mirrors the mesh across its local X axis; rotation spins around its Y axis. Three.js auto-handles the determinant-sign flip so face culling + lighting stay correct. |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 **Indexes:** `room_id`, `furniture_item_id`

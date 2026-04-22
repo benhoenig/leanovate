@@ -178,6 +178,8 @@
       "rotation": "Rotation",
       "viewProduct": "View product",
       "rotateAction": "Rotate",
+      "flipAction": "Flip",
+      "flipTitle": "Mirror the item horizontally (F)",
       "removeAction": "Remove",
       "placement": "PLACEMENT",
       "blockSize": "Block size",

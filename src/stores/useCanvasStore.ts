@@ -11,10 +11,11 @@ interface RemoveCommand { type: 'remove'; item: PlacedFurniture }
 interface MoveCommand { type: 'move'; itemId: string; prevX: number; prevY: number; nextX: number; nextY: number }
 interface RotateCommand { type: 'rotate'; itemId: string; prevRotationDeg: number; nextRotationDeg: number }
 interface ScaleCommand { type: 'scale'; itemId: string; prevScale: number; nextScale: number }
+interface MirrorCommand { type: 'mirror'; itemId: string; prevMirrored: boolean; nextMirrored: boolean }
 interface SwitchVariantCommand { type: 'switchVariant'; itemId: string; prevVariantId: string; prevPrice: number | null; nextVariantId: string; nextPrice: number | null }
 interface GeometryCommand { type: 'geometry'; roomId: string; prevGeometry: RoomGeometry; nextGeometry: RoomGeometry; prevWidthCm: number; prevHeightCm: number; nextWidthCm: number; nextHeightCm: number }
 
-type CanvasCommand = PlaceCommand | RemoveCommand | MoveCommand | RotateCommand | ScaleCommand | SwitchVariantCommand | GeometryCommand
+type CanvasCommand = PlaceCommand | RemoveCommand | MoveCommand | RotateCommand | ScaleCommand | MirrorCommand | SwitchVariantCommand | GeometryCommand
 
 const MAX_HISTORY = 50
 
@@ -79,6 +80,8 @@ interface CanvasState {
   moveItem: (id: string, roomX: number, roomY: number) => void
   /** Increment rotation by 90° (legacy keyboard rotate) */
   rotateItem: (id: string) => void
+  /** Toggle horizontal mirror for the placed item (scale.x flip at render time). Pushes an undo command. */
+  toggleItemMirror: (id: string) => void
   /** Set rotation to a specific angle in degrees (0–360 normalized). Pushes one undo command per `commitRotation` call. */
   setItemRotation: (id: string, deg: number) => void
   /** Push an undo command after continuous rotation (e.g. scroll-wheel drag). */
@@ -361,6 +364,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     pushCommand(set, get, { type: 'rotate', itemId: id, prevRotationDeg: prevRot, nextRotationDeg: nextRot })
   },
 
+  toggleItemMirror: (id) => {
+    const item = get().placedFurniture.find((i) => i.id === id)
+    if (!item) return
+    const prevMir = item.mirrored
+    const nextMir = !prevMir
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id ? { ...i, mirrored: nextMir } : i
+      ),
+    }))
+    rawUpdate('placed_furniture', id, { mirrored: nextMir }).then(({ error }) => {
+      if (error) console.error('toggleItemMirror DB:', error)
+    })
+    pushCommand(set, get, { type: 'mirror', itemId: id, prevMirrored: prevMir, nextMirrored: nextMir })
+  },
+
   setItemRotation: (id, deg) => {
     // Normalize to [0, 360)
     const normalized = ((deg % 360) + 360) % 360
@@ -511,6 +530,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           rawUpdate('placed_furniture', cmd.itemId, { scale_factor: cmd.prevScale }).then(({ error }) => { if (error) console.error('undo scale DB:', error) })
           break
         }
+        case 'mirror': {
+          set((s) => ({
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, mirrored: cmd.prevMirrored } : i),
+          }))
+          rawUpdate('placed_furniture', cmd.itemId, { mirrored: cmd.prevMirrored }).then(({ error }) => { if (error) console.error('undo mirror DB:', error) })
+          break
+        }
         case 'switchVariant': {
           set((s) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice } : i),
@@ -580,6 +606,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, scale_factor: cmd.nextScale } : i),
           }))
           rawUpdate('placed_furniture', cmd.itemId, { scale_factor: cmd.nextScale }).then(({ error }) => { if (error) console.error('redo scale DB:', error) })
+          break
+        }
+        case 'mirror': {
+          set((s) => ({
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, mirrored: cmd.nextMirrored } : i),
+          }))
+          rawUpdate('placed_furniture', cmd.itemId, { mirrored: cmd.nextMirrored }).then(({ error }) => { if (error) console.error('redo mirror DB:', error) })
           break
         }
         case 'switchVariant': {

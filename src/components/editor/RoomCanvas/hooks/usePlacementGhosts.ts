@@ -76,6 +76,7 @@ export function usePlacementGhosts(
         sort_order: 0,
         art_id: null,
         light_settings: null,
+        mirrored: false,
         created_at: '',
       }
       const category = catalog.categories.find((c) => c.id === item.category_id)

@@ -264,6 +264,15 @@ export const panelStyle = `
     background: transparent;
     color: var(--color-text-secondary);
   }
+  .fp-action-btn--on {
+    background: var(--color-primary-brand);
+    border-color: var(--color-primary-brand);
+    color: white;
+  }
+  .fp-action-btn--on:hover {
+    filter: brightness(1.05);
+    background: var(--color-primary-brand);
+  }
 
   /* Artwork (picture frame) panel */
   .fp-art-row {

@@ -608,6 +608,14 @@ export function useCanvasInteractions(
           void s.removeItem(s.selectedItemId)
         }
       }
+      if ((e.key === 'f' || e.key === 'F') && s.selectedItemId && !s.shapeEditMode) {
+        // Guard against typing in input/textarea fields
+        const target = e.target as HTMLElement | null
+        const tag = target?.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+        e.preventDefault()
+        s.toggleItemMirror(s.selectedItemId)
+      }
     }
 
     const onKeyUp = (e: KeyboardEvent) => {

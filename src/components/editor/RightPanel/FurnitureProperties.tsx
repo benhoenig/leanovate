@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCw, Trash2, ExternalLink, ImageIcon } from 'lucide-react'
+import { RotateCw, FlipHorizontal, Trash2, ExternalLink, ImageIcon } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useArtStore } from '@/stores/useArtStore'
@@ -9,9 +9,9 @@ import PlacedLightingSection from './PlacedLightingSection'
 import ArtPickerModal from '../ArtPickerModal'
 import type { PlacedLightSettings } from '@/types'
 
-export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number; art_id: string | null; y_cm: number; light_settings: PlacedLightSettings | null } }) {
+export default function FurnitureProperties({ placed }: { placed: { id: string; furniture_item_id: string; selected_variant_id: string; rotation_deg: number; price_at_placement: number | null; scale_factor: number; art_id: string | null; y_cm: number; light_settings: PlacedLightSettings | null; mirrored: boolean } }) {
   const { t } = useTranslation()
-  const { rotateItem, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem, setArt, setItemHeight } = useCanvasStore()
+  const { rotateItem, toggleItemMirror, setItemRotation, commitRotation, scaleItem, commitScale, switchVariant, removeItem, setArt, setItemHeight } = useCanvasStore()
   const { getArtById, getArtUrl } = useArtStore()
   const [artPickerOpen, setArtPickerOpen] = useState(false)
   const scaleBeforeRef = useRef(placed.scale_factor ?? 1)
@@ -256,6 +256,13 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
       <div className="panel-section">
         <button className="fp-action-btn" onClick={() => rotateItem(placed.id)}>
           <RotateCw size={13} /> {t('editor.properties.rotateAction')}
+        </button>
+        <button
+          className={`fp-action-btn ${placed.mirrored ? 'fp-action-btn--on' : ''}`}
+          onClick={() => toggleItemMirror(placed.id)}
+          title={t('editor.properties.flipTitle')}
+        >
+          <FlipHorizontal size={13} /> {t('editor.properties.flipAction')}
         </button>
         <button className="fp-action-btn fp-action-btn--danger" onClick={() => removeItem(placed.id)}>
           <Trash2 size={13} /> {t('editor.properties.removeAction')}

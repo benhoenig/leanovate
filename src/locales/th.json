@@ -178,6 +178,8 @@
       "rotation": "การหมุน",
       "viewProduct": "ดูสินค้า",
       "rotateAction": "หมุน",
+      "flipAction": "กลับข้าง",
+      "flipTitle": "กลับด้านซ้าย-ขวาของไอเท็ม (กด F)",
       "removeAction": "ลบออก",
       "placement": "การวาง",
       "blockSize": "ขนาดบล็อก",
