@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Project, Room, FinishMaterial } from '@/types'
-import { supabase, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
+import { rawSelect, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 
 interface ProjectState {
@@ -37,16 +37,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   isLoading: false,
 
   loadProjects: async () => {
+    // rawSelect (raw fetch) instead of supabase.from() to avoid the Supabase
+    // JS client lock (CLAUDE.md #8). The dashboard mounts fresh whenever the
+    // designer navigates back from the editor or admin, and any other
+    // in-flight client op (auth refresh, editor-side queries still winding
+    // down) can silently hang this load. Raw fetch bypasses the lock.
     set({ isLoading: true })
     try {
       const profile = useAuthStore.getState().profile
-      let query = supabase.from('projects').select('*').order('created_at', { ascending: false })
-      if (profile?.role !== 'admin') {
-        query = query.eq('owner_id', profile?.id ?? '')
-      }
-      const { data, error } = await query
-      if (error) throw error
-      set({ projects: data as Project[] })
+      const filter = profile?.role === 'admin'
+        ? 'order=created_at.desc'
+        : `owner_id=eq.${profile?.id ?? ''}&order=created_at.desc`
+      const { data, error } = await rawSelect<Project>('projects', filter)
+      if (error) throw new Error(error)
+      set({ projects: data ?? [] })
     } catch (error) {
       console.error('Failed to load projects:', error)
     } finally {
@@ -98,18 +102,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadProject: async (id) => {
+    // rawSelect instead of supabase.from() to avoid the Supabase JS client
+    // lock (CLAUDE.md #8). EditorPage mounts fresh when the designer clicks
+    // into a project, and any lingering client op from the dashboard or a
+    // previous editor session can silently hang both queries here.
     set({ isLoading: true })
     try {
       const [projectRes, roomsRes] = await Promise.all([
-        supabase.from('projects').select('*').eq('id', id).single(),
-        supabase.from('rooms').select('*').eq('project_id', id).order('sort_order', { ascending: true }),
+        rawSelect<Project>('projects', `id=eq.${id}`),
+        rawSelect<Room>('rooms', `project_id=eq.${id}&order=sort_order.asc`),
       ])
-      if (projectRes.error) throw projectRes.error
-      if (roomsRes.error) throw roomsRes.error
+      if (projectRes.error) throw new Error(projectRes.error)
+      if (roomsRes.error) throw new Error(roomsRes.error)
+      const project = projectRes.data?.[0] ?? null
+      const rooms = roomsRes.data ?? []
       set({
-        currentProject: projectRes.data as Project,
-        rooms: roomsRes.data as Room[],
-        selectedRoomId: (roomsRes.data as Room[])[0]?.id ?? null,
+        currentProject: project,
+        rooms,
+        selectedRoomId: rooms[0]?.id ?? null,
         isDirty: false,
       })
     } catch (error) {
@@ -194,14 +204,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setSelectedRoom: (id) => set({ selectedRoomId: id }),
 
   loadFinishMaterials: async () => {
-    const { data, error } = await supabase
-      .from('finish_materials')
-      .select('*')
-      .order('type', { ascending: true })
+    // rawSelect for the same reason as loadProjects/loadProject — EditorPage
+    // mounts fresh and this runs right alongside loadProject; the JS client
+    // lock could silently hang both queries.
+    const { data, error } = await rawSelect<FinishMaterial>(
+      'finish_materials',
+      'order=type.asc',
+    )
     if (error) {
       console.error('Failed to load finish materials:', error)
       return
     }
-    set({ finishMaterials: data as FinishMaterial[] })
+    set({ finishMaterials: data ?? [] })
   },
 }))
