@@ -125,7 +125,6 @@ export interface Room {
   geometry: RoomGeometry
   finishes: RoomFinishes
   sort_order: number
-  preview_image_url: string | null
   created_at: string
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Boxes, ArrowLeft, Save, Eye, FileText, Undo2, Redo2 } from 'lucide-react'
+import { Boxes, ArrowLeft, Save, FileText, Undo2, Redo2 } from 'lucide-react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -10,7 +10,6 @@ import { useTemplateStore } from '@/stores/useTemplateStore'
 import LeftSidebar from '@/components/editor/LeftSidebar'
 import RightPanel from '@/components/editor/RightPanel'
 import RoomCanvas from '@/components/editor/RoomCanvas'
-import RoomPreviewModal from '@/components/editor/RoomPreviewModal'
 import ConstructionDrawingModal from '@/components/editor/ConstructionDrawingModal'
 import LanguageToggle from '@/components/LanguageToggle'
 import { saveProjectThumbnail } from '@/lib/renderProjectThumbnail'
@@ -31,7 +30,6 @@ export default function EditorPage() {
   const canUndo = useCanvasStore((s) => s.canUndo)
   const canRedo = useCanvasStore((s) => s.canRedo)
 
-  const [showPreview, setShowPreview] = useState(false)
   const [showDrawings, setShowDrawings] = useState(false)
 
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId) ?? null
@@ -290,15 +288,6 @@ export default function EditorPage() {
             {t('editor.drawings')}
           </button>
           <button
-            className="editor-preview-btn"
-            onClick={() => setShowPreview(true)}
-            disabled={!selectedRoom}
-            title={t('editor.previewRoom')}
-          >
-            <Eye size={14} />
-            {t('editor.preview')}
-          </button>
-          <button
             className="editor-save-btn"
             onClick={handleSave}
             disabled={isLoading || !isDirty}
@@ -310,7 +299,6 @@ export default function EditorPage() {
       </header>
 
       {/* Room Preview Modal */}
-      {showPreview && <RoomPreviewModal onClose={() => setShowPreview(false)} />}
       {showDrawings && <ConstructionDrawingModal onClose={() => setShowDrawings(false)} />}
 
       {/* Editor Body */}

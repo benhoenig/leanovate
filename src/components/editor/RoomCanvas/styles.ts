@@ -48,6 +48,10 @@ export const canvasStyle = `
     top: 16px;
     right: 16px;
   }
+  .export-view-btn {
+    bottom: 16px;
+    right: 16px;
+  }
   .room-canvas.roam-mode {
     cursor: none;
   }

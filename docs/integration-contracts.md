@@ -24,7 +24,7 @@
 | 3 | Product Screenshot Extraction | Supabase Edge Function (Claude Vision) | Designer uploads a product page screenshot |
 | 4 | Replicate API — TRELLIS | Supabase Edge Function | Variant created (non-flat items). Multi-image input. |
 | 5 | Daily Link Recheck | Supabase Edge Function (scheduled) | Daily cron (3:00 AM Bangkok time) |
-| 6 | Room Perspective Preview | Client (browser, Three.js) | Designer clicks "Preview Room" |
+| 6 | Export Canvas View | Client (browser, Three.js) | Designer clicks the "Export view" button on the canvas |
 | 7 | 3D Canvas Rendering | Client (browser, Three.js) | Editor page mount (live canvas for placement) |
 
 ---
@@ -168,45 +168,31 @@
 
 ---
 
-## 6. Room Perspective Preview
+## 6. Export Canvas View
 
-**Purpose:** Render eye-level interior vignettes — realistic 3D perspective images of the current room, showing all placed furniture, room geometry (walls with door/window cutouts), and finishes. User can select which wall to view from via wall selector buttons. Used for client presentations.
+**Purpose:** Capture the designer's current camera angle on the live 3D canvas as a 4K PNG and trigger a browser download. Used to share a specific view with a client (email, LINE, proposal PDF) without a screen capture tool.
 
-**Triggered by:** Designer clicks "Preview Room" button and selects a wall from the wall selector.
+**Triggered by:** Designer clicks the floating "Export view" button at the canvas's bottom-right.
 
-**Send:**
-- Room geometry (walls, floor, ceiling dimensions from `rooms` table)
-- Room finishes (wall color/material, floor material, door style, window style)
-- All placed furniture in the room: .glb file paths + positions + directions + selected variant
-- Camera wall index: which wall segment the camera stands at (0 to N-1, user-selected)
+**How it works:**
+1. Read current renderer drawingBuffer dimensions + pixel ratio.
+2. Temporarily `renderer.setSize(3840, height, /* updateStyle */ false)` — drawingBuffer bumps to 4K while the CSS display size is unchanged (the browser keeps scaling the canvas into its box, so the high-res frame is visually invisible).
+3. `renderer.render(scene, camera)` — one frame at 4K.
+4. `canvas.toBlob()` → PNG.
+5. Synthesize an `<a download>` click to trigger the browser download.
+6. Restore the original `setSize` + pixelRatio and render once more so the next animate-loop frame is already at normal res.
 
-**Rendered by:** Three.js client-side (browser) — implemented in `src/lib/renderRoomPreview.ts`
+**Rendered by:** The live canvas's own `WebGLRenderer` — no separate scene build, no `.glb` reload. Everything visible in the designer's viewport (lighting, shadows, placed fixtures, ceiling-light emissives, etc.) is in the export.
 
-**Get back:** Single PNG image (1920×1080) — eye-level interior vignette with realistic lighting
+**Output:** PNG file, 3840 wide, height = 3840 / current aspect ratio. Filename: `{project}_{room}_{YYYYMMDD_HHmm}.png`.
 
-**Where it goes:** Displayed in a modal overlay (`RoomPreviewModal.tsx`) with wall selector buttons at top. User can download as PNG or save to `thumbnails` bucket in Supabase Storage, URL stored in `rooms.preview_image_url`.
+**Implementation:** `src/lib/exportCanvasView.ts` (helper) + button in `src/components/editor/RoomCanvas/index.tsx`.
 
-**Wall selector:**
-- N buttons (one per wall segment from `getVertices(room).length`), labeled "Wall 1", "Wall 2", etc.
-- Each button triggers a new render from that wall's perspective
-- Active button: primary brand gradient, white text. Inactive: outline style.
-- Disabled during rendering (loading spinner shown)
+**Availability:** Design mode only. Hidden in roam mode — first-person captures are typically weirdly framed; designers swap to design mode if they want to export.
 
-**Rendering specs:**
-- PerspectiveCamera (FOV 70°) at 160cm eye height, positioned 0.4m inward from selected wall midpoint, looking perpendicular across the room
-- Room shell: floor (ShapeGeometry from polygon vertices), walls (PlaneGeometry or ShapeGeometry with door/window cutouts), ceiling
-- Doors: rectangular cutout holes in walls + brown door panel meshes (MeshStandardMaterial)
-- Windows: rectangular cutout holes + semi-transparent glass panes (opacity 0.3) + grey frame borders
-- All placed .glb models loaded via GLTFLoader, positioned at (u, 0, v), scaled by declared dimensions, rotated by direction
-- Lighting: ambient 0.5 white + warm directional sun (1.0) + cool fill light (0.3) + warm point light at ceiling centroid (0.4)
-- Output: 1920×1080 PNG, horizontally mirrored to correct Three.js camera handedness for CCW-wound rooms
-- All materials use `DoubleSide` rendering
+**Not persisted:** no DB column, no storage upload. Exports are ephemeral files owned by the designer's machine. (The old `rooms.preview_image_url` column was dropped in migration `20260428000000_drop_room_preview_image.sql`.)
 
-**Render time:** Approximately 3–10 seconds depending on number of furniture pieces and .glb model complexity.
-
-**Error handling:** On failure (e.g. missing .glb files for some furniture), render what's available and show a warning banner: "X item(s) could not be rendered (missing 3D models)."
-
-**Post-MVP upgrade path:** Replace wall selector with free camera controls or add interactive 3D walkthrough (full Three.js scene in browser).
+**Error handling:** If any Three.js ref is missing (shouldn't happen in practice — canvas must be mounted for the button to exist) the function silently returns.
 
 ---
 

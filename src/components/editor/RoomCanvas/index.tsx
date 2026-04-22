@@ -17,8 +17,11 @@
  */
 
 import { useTranslation } from 'react-i18next'
+import { Download } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { exportCanvasView, buildExportFilename } from '@/lib/exportCanvasView'
 import type { Room, FinishMaterial } from '@/types'
 import { useThreeScene } from './hooks/useThreeScene'
 import { useRoomShell } from './hooks/useRoomShell'
@@ -55,12 +58,21 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
   const cameraMode = useUIStore((s) => s.cameraMode)
   const setCameraMode = useUIStore((s) => s.setCameraMode)
 
-  const { containerRef, dimLabelsRef, roamControlsRef } = ctx
+  const { containerRef, dimLabelsRef, roamControlsRef, rendererRef, sceneRef, cameraRef } = ctx
 
   const enterRoam = () => {
     setCameraMode('roam')
     // Lock on the next frame so the click event has finished propagating
     requestAnimationFrame(() => roamControlsRef.current?.lock())
+  }
+
+  const handleExportView = () => {
+    const renderer = rendererRef.current
+    const scene = sceneRef.current
+    const camera = cameraRef.current
+    if (!renderer || !scene || !camera) return
+    const projectName = useProjectStore.getState().currentProject?.name ?? 'project'
+    void exportCanvasView(renderer, scene, camera, buildExportFilename(projectName, room.name))
   }
 
   return (
@@ -93,6 +105,19 @@ export default function RoomCanvas({ room, finishMaterials }: Props) {
       >
         {cameraMode === 'roam' ? `🎨 ${t('editor.canvas.cameraDesign')}` : `🚶 ${t('editor.canvas.cameraRoam')}`}
       </button>
+
+      {/* Export view — downloads the current camera angle as a 4K PNG */}
+      {cameraMode === 'design' && (
+        <button
+          type="button"
+          className="canvas-toggle-btn export-view-btn"
+          onClick={handleExportView}
+          title={t('editor.canvas.exportViewTitle')}
+        >
+          <Download size={13} />
+          {t('editor.canvas.exportView')}
+        </button>
+      )}
 
       {/* Roam-mode hint */}
       {cameraMode === 'roam' && (
