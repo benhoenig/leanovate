@@ -705,17 +705,23 @@ function ItemDetailDrawer({
           })}
         </div>
 
-        {/* Admin catalog gate */}
-        {isAdmin && item.status === 'pending' && (
+        {/* Admin catalog gate — shown on any non-approved item. Lets admins
+            approve their own drafts directly (they don't go through the
+            Submit for Review flow), and re-approve rejected items after
+            edits. For designers the Submit for Review button is shown
+            instead on drafts (below). */}
+        {isAdmin && item.status !== 'approved' && (
           <div className="detail-admin">
             <span className="detail-admin-label">{t('catalog.catalogApproval')}</span>
             <div className="detail-admin-btns">
               <button className="detail-btn success" onClick={onApproveItem}>
                 {t('catalog.approveItem')}
               </button>
-              <button className="detail-btn danger" onClick={onRejectItem}>
-                {t('catalog.rejectItem')}
-              </button>
+              {item.status !== 'rejected' && (
+                <button className="detail-btn danger" onClick={onRejectItem}>
+                  {t('catalog.rejectItem')}
+                </button>
+              )}
             </div>
           </div>
         )}
