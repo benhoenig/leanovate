@@ -632,7 +632,10 @@
       "regen3D": "Regen 3D",
       "regen3DTooltip": "Regenerate 3D model",
       "regenConfirmMsg": "Regenerate 3D model? This re-runs TRELLIS (~1 min) and resets approval to pending.",
-      "sourceLabel": "Source {{index}}"
+      "sourceLabel": "Source {{index}}",
+      "catalogApproval": "Catalog approval",
+      "approveItem": "Approve",
+      "rejectItem": "Reject"
     },
     "linkHealth": {
       "title": "Link Health",

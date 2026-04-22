@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
+import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box, Check, X } from 'lucide-react'
 import { rawSelect, rawUpdate } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import AdminListSkeleton from './AdminListSkeleton'
@@ -68,6 +68,8 @@ export default function CatalogOverview() {
   const [isLoading, setIsLoading] = useState(true)
   const [regeneratingSprites, setRegeneratingSprites] = useState<Set<string>>(new Set())
   const [confirmAction, setConfirmAction] = useState<{ variantId: string; type: 'sprites' } | null>(null)
+  const approveItem = useCatalogStore((s) => s.approveItem)
+  const rejectItem = useCatalogStore((s) => s.rejectItem)
 
   const reloadData = async () => {
     // rawSelect (raw fetch) to bypass the Supabase JS client lock — see
@@ -307,6 +309,32 @@ export default function CatalogOverview() {
                         <ExternalLink size={11} />
                         {item.source_domain}
                       </a>
+                    )}
+
+                    {/* Admin catalog-gate actions — shown on any non-approved
+                        item. Reject button hidden on already-rejected items. */}
+                    {item.status !== 'approved' && (
+                      <div className="catalog-approval-row">
+                        <span className="catalog-approval-label">
+                          {t('admin.catalogOverview.catalogApproval')}
+                        </span>
+                        <button
+                          className="catalog-approve-btn"
+                          onClick={(e) => { e.stopPropagation(); void approveItem(item.id) }}
+                        >
+                          <Check size={12} />
+                          {t('admin.catalogOverview.approveItem')}
+                        </button>
+                        {item.status !== 'rejected' && (
+                          <button
+                            className="catalog-reject-btn"
+                            onClick={(e) => { e.stopPropagation(); void rejectItem(item.id) }}
+                          >
+                            <X size={12} />
+                            {t('admin.catalogOverview.rejectItem')}
+                          </button>
+                        )}
+                      </div>
                     )}
 
                     {variants.length === 0 ? (
@@ -726,6 +754,49 @@ export default function CatalogOverview() {
         .catalog-regen-btn:disabled {
           opacity: 0.6;
           cursor: not-allowed;
+        }
+        .catalog-approval-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          margin-top: 10px;
+          background: var(--color-warning-bg);
+          border: 1px solid rgba(245, 166, 35, 0.25);
+          border-radius: 8px;
+        }
+        .catalog-approval-label {
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--color-warning-text);
+          margin-right: auto;
+          text-transform: uppercase;
+          letter-spacing: 0.4px;
+        }
+        .catalog-approve-btn,
+        .catalog-reject-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 5px 12px;
+          border-radius: 6px;
+          border: none;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: filter 0.15s;
+          color: white;
+        }
+        .catalog-approve-btn {
+          background: var(--color-success);
+        }
+        .catalog-reject-btn {
+          background: var(--color-error);
+        }
+        .catalog-approve-btn:hover,
+        .catalog-reject-btn:hover {
+          filter: brightness(1.08);
         }
         .spinning {
           animation: spin 1s linear infinite;

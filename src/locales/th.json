@@ -632,7 +632,10 @@
       "regen3D": "สร้างโมเดลใหม่",
       "regen3DTooltip": "สร้างโมเดล 3D ใหม่",
       "regenConfirmMsg": "สร้างโมเดล 3D ใหม่? ระบบจะรัน TRELLIS อีกครั้ง (~1 นาที) และรีเซ็ตสถานะอนุมัติเป็นรอตรวจ",
-      "sourceLabel": "ภาพต้นฉบับ {{index}}"
+      "sourceLabel": "ภาพต้นฉบับ {{index}}",
+      "catalogApproval": "อนุมัติเข้าแคตตาล็อก",
+      "approveItem": "อนุมัติ",
+      "rejectItem": "ปฏิเสธ"
     },
     "linkHealth": {
       "title": "สถานะลิงก์",
