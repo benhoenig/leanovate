@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, X, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { rawSelect } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureItem, FurnitureVariant } from '@/types'
@@ -21,15 +21,18 @@ export default function PendingApprovalQueue() {
   const { approveItem, rejectItem } = useCatalogStore()
   const localeTag = i18n.resolvedLanguage === 'th' ? 'th-TH' : 'en-US'
 
+  // Uses `rawSelect` (raw fetch) instead of `supabase.from()` to avoid the
+  // Supabase JS client deadlock (CLAUDE.md #8). The dashboard's `loadProjects`
+  // runs a supabase.from() call right before navigation to /admin, and that
+  // in-flight operation can silently lock the client — blocking every
+  // subsequent query until a full page refresh. Raw fetch bypasses the lock.
   const loadPending = async () => {
     setIsLoading(true)
     try {
-      // Load pending items
-      const { data: items, error: itemsErr } = await supabase
-        .from('furniture_items')
-        .select('*')
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
+      const { data: items, error: itemsErr } = await rawSelect<FurnitureItem>(
+        'furniture_items',
+        'status=eq.pending&order=created_at.desc',
+      )
       if (itemsErr || !items) { setIsLoading(false); return }
 
       if (items.length === 0) {
@@ -38,38 +41,36 @@ export default function PendingApprovalQueue() {
         return
       }
 
-      // Load submitter names
       const submitterIds = [...new Set(items.map((i) => i.submitted_by))]
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, display_name')
-        .in('id', submitterIds)
+      const { data: profiles } = await rawSelect<{ id: string; display_name: string }>(
+        'profiles',
+        `id=in.(${submitterIds.join(',')})`,
+        'id,display_name',
+      )
       const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.display_name]))
 
-      // Load categories
       const categoryIds = [...new Set(items.map((i) => i.category_id))]
-      const { data: categories } = await supabase
-        .from('furniture_categories')
-        .select('id, name')
-        .in('id', categoryIds)
-      const catMap = new Map((categories ?? []).map((c: { id: string; name: string }) => [c.id, c.name]))
+      const { data: categories } = await rawSelect<{ id: string; name: string }>(
+        'furniture_categories',
+        `id=in.(${categoryIds.join(',')})`,
+        'id,name',
+      )
+      const catMap = new Map((categories ?? []).map((c) => [c.id, c.name]))
 
-      // Load variants for each item
       const itemIds = items.map((i) => i.id)
-      const { data: allVariants } = await supabase
-        .from('furniture_variants')
-        .select('*')
-        .in('furniture_item_id', itemIds)
-        .order('sort_order', { ascending: true })
+      const { data: allVariants } = await rawSelect<FurnitureVariant>(
+        'furniture_variants',
+        `furniture_item_id=in.(${itemIds.join(',')})&order=sort_order.asc`,
+      )
 
       const variantsByItem = new Map<string, FurnitureVariant[]>()
-      for (const v of (allVariants ?? []) as FurnitureVariant[]) {
+      for (const v of allVariants ?? []) {
         const list = variantsByItem.get(v.furniture_item_id) ?? []
         list.push(v)
         variantsByItem.set(v.furniture_item_id, list)
       }
 
-      const result: PendingItemWithDetails[] = (items as FurnitureItem[]).map((item) => ({
+      const result: PendingItemWithDetails[] = items.map((item) => ({
         item,
         variants: variantsByItem.get(item.id) ?? [],
         submitterName: profileMap.get(item.submitted_by) ?? t('admin.pending.unknownSubmitter'),

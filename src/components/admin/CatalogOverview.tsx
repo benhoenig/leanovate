@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
-import { supabase, rawUpdate } from '@/lib/supabase'
+import { rawSelect, rawUpdate } from '@/lib/supabase'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureItem, FurnitureCategory, FurnitureVariant, ItemStatus } from '@/types'
@@ -70,13 +70,15 @@ export default function CatalogOverview() {
   const [confirmAction, setConfirmAction] = useState<{ variantId: string; type: 'sprites' } | null>(null)
 
   const reloadData = async () => {
-    const variantsRes = await supabase
-      .from('furniture_variants')
-      .select('*')
-      .order('sort_order', { ascending: true })
-    if (variantsRes.data) {
+    // rawSelect (raw fetch) to bypass the Supabase JS client lock — see
+    // CLAUDE.md #8. Safe to call anytime.
+    const { data } = await rawSelect<FurnitureVariant>(
+      'furniture_variants',
+      'order=sort_order.asc',
+    )
+    if (data) {
       const map = new Map<string, FurnitureVariant[]>()
-      for (const v of variantsRes.data as FurnitureVariant[]) {
+      for (const v of data) {
         const list = map.get(v.furniture_item_id) ?? []
         list.push(v)
         map.set(v.furniture_item_id, list)
@@ -89,15 +91,15 @@ export default function CatalogOverview() {
     const load = async () => {
       setIsLoading(true)
       const [itemsRes, catsRes, variantsRes] = await Promise.all([
-        supabase.from('furniture_items').select('*').order('created_at', { ascending: false }),
-        supabase.from('furniture_categories').select('*').order('sort_order', { ascending: true }),
-        supabase.from('furniture_variants').select('*').order('sort_order', { ascending: true }),
+        rawSelect<FurnitureItem>('furniture_items', 'order=created_at.desc'),
+        rawSelect<FurnitureCategory>('furniture_categories', 'order=sort_order.asc'),
+        rawSelect<FurnitureVariant>('furniture_variants', 'order=sort_order.asc'),
       ])
-      if (itemsRes.data) setItems(itemsRes.data as FurnitureItem[])
-      if (catsRes.data) setCategories(catsRes.data as FurnitureCategory[])
+      if (itemsRes.data) setItems(itemsRes.data)
+      if (catsRes.data) setCategories(catsRes.data)
       if (variantsRes.data) {
         const map = new Map<string, FurnitureVariant[]>()
-        for (const v of variantsRes.data as FurnitureVariant[]) {
+        for (const v of variantsRes.data) {
           const list = map.get(v.furniture_item_id) ?? []
           list.push(v)
           map.set(v.furniture_item_id, list)
