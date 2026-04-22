@@ -40,22 +40,60 @@ export function invokeEdgeFunction(
     })
 }
 
+// ── TRELLIS call serialization + 429 retry ──────────────────────────────────
+//
+// Replicate applies a "burst = 1" concurrent-create limit on accounts below
+// a (undocumented, roughly $20) credit threshold — see CLAUDE.md backlog.
+// When a designer batch-uploads 4 color variants, three get 429'd instantly.
+//
+// Fix: every runRenderPipeline call chains onto a module-level promise tail,
+// so only one generate-3d-model edge-function call is in flight at a time.
+// On 429, the worker parses `retry_after` from the error body, waits that
+// many seconds, and retries the same variant — no failure surfaced to the
+// queue tray.
+//
+// The edge function itself blocks on Replicate polling, so "one in flight"
+// means one TRELLIS prediction per ~30–60s. Slower than parallel, but
+// reliable under the current rate-limit tier.
+
+let queueTail: Promise<void> = Promise.resolve()
+const MAX_RATE_LIMIT_RETRIES = 6
+const DEFAULT_RETRY_SECONDS = 15
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/**
+ * Detects a rate-limit error (Replicate 429) in the edge-function error
+ * string and pulls out the retry delay. Returns null for non-429 errors.
+ */
+function parseRateLimitDelay(errorText: string): number | null {
+  if (!errorText.includes('HTTP 429')) return null
+  const match = errorText.match(/"retry_after"\s*:\s*(\d+)/)
+  if (match) {
+    const s = parseInt(match[1], 10)
+    if (!isNaN(s) && s > 0) return s
+  }
+  return DEFAULT_RETRY_SECONDS
+}
+
 /**
  * Drives the post-variant-creation pipeline for non-flat items:
  *   1. Set render_status = 'processing' locally
- *   2. Invoke generate-3d-model (TRELLIS)
- *   3. Render 4 isometric sprites client-side
- *   4. Set render_status = 'completed' | 'failed'
+ *   2. Invoke generate-3d-model (TRELLIS) — one at a time, retries 429s
+ *   3. Set render_status = 'completed' | 'failed'
  *
  * render_approval_status stays 'pending' regardless — designer decides.
  * DB writes happen inside the edge function; this function only mirrors
  * render_status locally.
- *
- * Phase 8 update: sprite rendering removed. The .glb is the canvas asset
- * directly (rendered in Three.js), so render_status flips to 'completed'
- * as soon as TRELLIS returns a valid glb_path.
  */
-export async function runRenderPipeline(variantId: string): Promise<void> {
+export function runRenderPipeline(variantId: string): Promise<void> {
+  const myTurn = queueTail.then(() => runRenderPipelineWorker(variantId))
+  // Swallow rejections from the tail so one failure doesn't break the chain.
+  queueTail = myTurn.catch(() => {})
+  return myTurn
+}
+
+async function runRenderPipelineWorker(variantId: string): Promise<void> {
   const patch = (updates: Partial<FurnitureVariant>) =>
     useCatalogStore.setState((state) => ({
       variants: mapVariant(state.variants, variantId, updates),
@@ -63,27 +101,35 @@ export async function runRenderPipeline(variantId: string): Promise<void> {
 
   patch({ render_status: 'processing' as RenderStatus })
 
-  const result = await invokeEdgeFunction('generate-3d-model', { variant_id: variantId })
-  if (result.error) {
-    patch({ render_status: 'failed' as RenderStatus })
-    return
+  let attempt = 0
+  while (true) {
+    const result = await invokeEdgeFunction('generate-3d-model', { variant_id: variantId })
+    if (!result.error) {
+      const glbPath = result.data?.glb_path as string | undefined
+      if (!glbPath) {
+        patch({ render_status: 'failed' as RenderStatus })
+        return
+      }
+      patch({ glb_path: glbPath, render_status: 'completed' as RenderStatus })
+      runThumbnailBackfill(variantId).catch((err) =>
+        console.warn('[runRenderPipeline] thumbnail backfill failed:', err)
+      )
+      return
+    }
+
+    // 429 → wait retry_after and retry. Any other error → mark failed.
+    const delaySec = parseRateLimitDelay(result.error)
+    if (delaySec == null || attempt >= MAX_RATE_LIMIT_RETRIES) {
+      patch({ render_status: 'failed' as RenderStatus })
+      return
+    }
+    attempt++
+    console.warn(
+      `[runRenderPipeline] variant ${variantId} rate-limited (attempt ${attempt}/${MAX_RATE_LIMIT_RETRIES}), retrying in ${delaySec}s`,
+    )
+    // Buffer a second so we're past Replicate's reset window.
+    await sleep((delaySec + 1) * 1000)
   }
-
-  const glbPath = result.data?.glb_path as string | undefined
-  if (!glbPath) {
-    patch({ render_status: 'failed' as RenderStatus })
-    return
-  }
-
-  patch({ glb_path: glbPath, render_status: 'completed' as RenderStatus })
-
-  // Kick off the tile snapshot as soon as the .glb is available — even before
-  // designer approval — so the catalog has a real thumbnail the moment the
-  // render gate clears. Failures are silent; the tile just uses the original
-  // photo fallback.
-  runThumbnailBackfill(variantId).catch((err) =>
-    console.warn('[runRenderPipeline] thumbnail backfill failed:', err)
-  )
 }
 
 // ── Thumbnail backfill ──────────────────────────────────────────────────────
