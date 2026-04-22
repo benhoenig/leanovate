@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { UserPlus, Shield, User, Trash2, AlertCircle } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { rawSelect } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import AdminListSkeleton from './AdminListSkeleton'
 import type { Profile, UserRole } from '@/types'
@@ -62,13 +62,14 @@ export default function TeamManagement() {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
   const loadMembers = async () => {
+    // rawSelect (raw fetch) — see CLAUDE.md #8.
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .order('created_at', { ascending: true })
+    const { data, error } = await rawSelect<Profile>(
+      'profiles',
+      'order=created_at.asc',
+    )
     if (error) { console.error('loadMembers:', error); setIsLoading(false); return }
-    setMembers(data as Profile[])
+    setMembers(data ?? [])
     setIsLoading(false)
   }
 

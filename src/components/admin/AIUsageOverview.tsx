@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Cpu, DollarSign, Zap, TrendingUp } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { rawSelect } from '@/lib/supabase'
 
 interface UsageRow {
   id: string
@@ -58,20 +58,20 @@ export default function AIUsageOverview() {
   const loadUsage = useCallback(async () => {
     setIsLoading(true)
 
-    let query = supabase
-      .from('ai_usage_log')
-      .select('*, profiles(display_name)')
-      .order('created_at', { ascending: false })
-
+    // rawSelect (raw fetch) — see CLAUDE.md #8.
+    const parts: string[] = ['order=created_at.desc']
     if (period === '7d') {
       const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-      query = query.gte('created_at', since)
+      parts.push(`created_at=gte.${since}`)
     } else if (period === '30d') {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      query = query.gte('created_at', since)
+      parts.push(`created_at=gte.${since}`)
     }
-
-    const { data, error } = await query
+    const { data, error } = await rawSelect<Record<string, unknown>>(
+      'ai_usage_log',
+      parts.join('&'),
+      '*,profiles(display_name)',
+    )
 
     if (error) {
       console.error('AI usage load error:', error)

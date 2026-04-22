@@ -4,7 +4,7 @@ import { Plus, Trash2, Upload, LayoutDashboard, Palette, Package, DoorOpen, Laye
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { supabase, rawStorageUpload } from '@/lib/supabase'
+import { rawInsert, rawStorageUpload } from '@/lib/supabase'
 import type { FinishType } from '@/types'
 import CatalogPanel from './CatalogPanel'
 import FixturePickerPanel from './FixturePickerPanel'
@@ -72,26 +72,25 @@ export default function LeftSidebar() {
     // and lighting uploads keep texture_url null — those surfaces render as
     // flat color for now.
     const isTileableType = type === 'wall' || type === 'floor'
-    const { data: matData, error: insertError } = await supabase
-      .from('finish_materials')
-      .insert({
-        type,
-        name: file.name,
-        thumbnail_path: publicUrl,
-        texture_url: isTileableType ? publicUrl : null,
-        tile_size_cm: isTileableType ? 200 : null,
-        is_custom: true,
-        uploaded_by: user.id,
-      })
-      .select()
-      .single()
-    if (insertError) {
+    // rawInsert (raw fetch) instead of supabase.insert — writes must never
+    // go through the supabase JS client per CLAUDE.md #8 (client can deadlock
+    // against concurrent operations including CatalogPanel polling).
+    const { data: matData, error: insertError } = await rawInsert<{ id: string }>('finish_materials', {
+      type,
+      name: file.name,
+      thumbnail_path: publicUrl,
+      texture_url: isTileableType ? publicUrl : null,
+      tile_size_cm: isTileableType ? 200 : null,
+      is_custom: true,
+      uploaded_by: user.id,
+    })
+    if (insertError || !matData) {
       showToast(t('editor.finishes.saveFailed'), 'error')
       return
     }
     await loadFinishMaterials()
     if (selectedRoom) {
-      handleFinishSelect(type, (matData as { id: string }).id)
+      handleFinishSelect(type, matData.id)
     }
     showToast(t('editor.finishes.customUploaded'), 'success')
   }

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { supabase, rawInsert, rawUpdate, rawDelete, rawStorageUpload, getPublicStorageUrl, getAuthToken } from '@/lib/supabase'
+import { rawSelect, rawInsert, rawUpdate, rawDelete, rawStorageUpload, getPublicStorageUrl, getAuthToken } from '@/lib/supabase'
 import { useAuthStore } from './useAuthStore'
 import type { ArtImage, ArtScope } from '@/types'
 
@@ -69,17 +69,19 @@ export const useArtStore = create<ArtState>((set, get) => ({
   error: null,
 
   loadArt: async () => {
+    // rawSelect — fires from useFurnitureLayer on editor mount, concurrently
+    // with catalog + project loads. See CLAUDE.md #8.
+    // RLS filters to: own private art + all team art (+ admin sees all).
     set({ isLoading: true, error: null })
-    // RLS filters this to: own private art + all team art (+ admin sees all)
-    const { data, error } = await supabase
-      .from('art_library')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const { data, error } = await rawSelect<ArtImage>(
+      'art_library',
+      'order=created_at.desc',
+    )
     if (error) {
-      set({ isLoading: false, error: error.message })
+      set({ isLoading: false, error })
       return
     }
-    set({ art: (data as ArtImage[]) ?? [], isLoading: false })
+    set({ art: data ?? [], isLoading: false })
   },
 
   uploadArt: async (file, name) => {

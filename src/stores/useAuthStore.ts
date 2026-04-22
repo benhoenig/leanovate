@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Profile } from '@/types'
-import { supabase } from '@/lib/supabase'
+import { supabase, rawSelect } from '@/lib/supabase'
 import type { User } from '@supabase/supabase-js'
 
 interface AuthState {
@@ -93,16 +93,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loadProfile: async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
+    // rawSelect (raw fetch) to avoid supabase client deadlock (CLAUDE.md #8).
+    // loadProfile runs on SIGNED_IN + page refresh init, can overlap with
+    // any other mount-time read in the app.
+    const { data, error } = await rawSelect<Profile>(
+      'profiles',
+      `id=eq.${userId}`,
+    )
 
     if (error) {
       console.error('Failed to load profile:', error)
       return
     }
-    set({ profile: data as Profile })
+    const row = data?.[0]
+    if (row) set({ profile: row })
   },
 }))

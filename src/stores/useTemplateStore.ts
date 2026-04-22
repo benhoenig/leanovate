@@ -5,7 +5,7 @@ import type {
   DesignStyleTemplate,
   StalenessAlert,
 } from '@/types'
-import { supabase, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
+import { rawSelect, rawInsert, rawUpdate, rawDelete } from '@/lib/supabase'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
@@ -117,31 +117,38 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
   // ─── Loaders ──────────────────────────────────────────────────────────────
 
+  // rawSelect (raw fetch) — same reason as every other load* method (see
+  // CLAUDE.md #8). EditorPage mount fires `loadAllTemplates` concurrently
+  // with catalog + project loads; the supabase JS client silently deadlocks
+  // any one of these when many race. The symptom was saving a template and
+  // seeing it "disappear right away" — the optimistic add worked, then a
+  // hung load resolved late with a stale (or empty) snapshot that clobbered
+  // the local state.
   loadUnitTemplates: async () => {
-    const { data, error } = await supabase
-      .from('unit_layout_templates')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const { data, error } = await rawSelect<UnitLayoutTemplate>(
+      'unit_layout_templates',
+      'order=created_at.desc',
+    )
     if (error) { console.error('loadUnitTemplates:', error); return }
-    set({ unitTemplates: data as UnitLayoutTemplate[] })
+    set({ unitTemplates: data ?? [] })
   },
 
   loadFurnitureTemplates: async () => {
-    const { data, error } = await supabase
-      .from('furniture_layout_templates')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const { data, error } = await rawSelect<FurnitureLayoutTemplate>(
+      'furniture_layout_templates',
+      'order=created_at.desc',
+    )
     if (error) { console.error('loadFurnitureTemplates:', error); return }
-    set({ furnitureTemplates: data as FurnitureLayoutTemplate[] })
+    set({ furnitureTemplates: data ?? [] })
   },
 
   loadStyleTemplates: async () => {
-    const { data, error } = await supabase
-      .from('design_style_templates')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const { data, error } = await rawSelect<DesignStyleTemplate>(
+      'design_style_templates',
+      'order=created_at.desc',
+    )
     if (error) { console.error('loadStyleTemplates:', error); return }
-    set({ styleTemplates: data as DesignStyleTemplate[] })
+    set({ styleTemplates: data ?? [] })
   },
 
   loadAllTemplates: async () => {

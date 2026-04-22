@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link2, AlertTriangle, CheckCircle, HelpCircle, RefreshCw, Loader2 } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { rawSelect } from '@/lib/supabase'
 import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureVariant } from '@/types'
 
@@ -54,14 +54,17 @@ export default function LinkHealthOverview() {
 
   const loadVariants = useCallback(async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('furniture_variants')
-      .select('*, furniture_items!inner(name)')
-      .order('last_checked_at', { ascending: true, nullsFirst: true })
+    // rawSelect (raw fetch) to bypass supabase JS client lock (CLAUDE.md #8).
+    // PostgREST embedded-select syntax for the inner join on furniture_items.
+    const { data, error } = await rawSelect<Record<string, unknown>>(
+      'furniture_variants',
+      'order=last_checked_at.asc.nullsfirst',
+      '*,furniture_items!inner(name)',
+    )
 
     if (error) { console.error('LinkHealth load error:', error); setIsLoading(false); return }
 
-    const mapped: VariantWithItemName[] = (data ?? []).map((row: Record<string, unknown>) => {
+    const mapped: VariantWithItemName[] = (data ?? []).map((row) => {
       const itemData = row.furniture_items as { name: string } | null
       return {
         ...row,
