@@ -537,7 +537,27 @@ export function useCanvasInteractions(
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
-      // Roam mode WASD capture (runs first; if in roam, skip design-mode hotkeys)
+      // Global undo / redo hotkeys (runs before the roam branch so they work
+      // regardless of camera mode). Matches the tooltip on the toolbar buttons.
+      //   Cmd/Ctrl + Z          → undo
+      //   Cmd/Ctrl + Shift + Z  → redo (macOS convention)
+      //   Ctrl + Y              → redo (Windows fallback)
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) {
+          void useCanvasStore.getState().redo()
+        } else {
+          void useCanvasStore.getState().undo()
+        }
+        return
+      }
+      if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        void useCanvasStore.getState().redo()
+        return
+      }
+
+      // Roam mode WASD capture (runs after undo/redo so those still work in roam)
       if (useUIStore.getState().cameraMode === 'roam') {
         if (e.key === 'w' || e.key === 'W') ctx.roamKeysRef.current.w = true
         else if (e.key === 's' || e.key === 'S') ctx.roamKeysRef.current.s = true
