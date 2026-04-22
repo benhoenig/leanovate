@@ -18,7 +18,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
-  supabase,
+  rawSelect,
   rawStorageDownload,
   rawStorageUpload,
   rawUpdate,
@@ -131,23 +131,24 @@ export function getProjectThumbnailUrl(
 export async function refreshProjectThumbnailFromDb(
   projectId: string,
 ): Promise<{ path: string | null; error: string | null; noRooms: boolean }> {
-  const { data: rooms, error: roomsErr } = await supabase
-    .from('rooms')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('sort_order', { ascending: true })
-    .limit(1)
-  if (roomsErr) return { path: null, error: roomsErr.message, noRooms: false }
+  // rawSelect throughout — this helper runs on hover-refresh from the
+  // dashboard and post-save from the editor, both moments where other
+  // supabase client reads may still be in flight. See CLAUDE.md #8.
+  const { data: rooms, error: roomsErr } = await rawSelect<Room>(
+    'rooms',
+    `project_id=eq.${projectId}&order=sort_order.asc&limit=1`,
+  )
+  if (roomsErr) return { path: null, error: roomsErr, noRooms: false }
   if (!rooms || rooms.length === 0) return { path: null, error: null, noRooms: true }
 
-  const primary = rooms[0] as Room
+  const primary = rooms[0]
 
-  const { data: placed, error: placedErr } = await supabase
-    .from('placed_furniture')
-    .select('*')
-    .eq('room_id', primary.id)
-  if (placedErr) return { path: null, error: placedErr.message, noRooms: false }
-  const placedFurniture = (placed ?? []) as PlacedFurniture[]
+  const { data: placed, error: placedErr } = await rawSelect<PlacedFurniture>(
+    'placed_furniture',
+    `room_id=eq.${primary.id}`,
+  )
+  if (placedErr) return { path: null, error: placedErr, noRooms: false }
+  const placedFurniture = placed ?? []
 
   const itemIds = Array.from(new Set(placedFurniture.map((p) => p.furniture_item_id)))
   const variantIds = Array.from(new Set(placedFurniture.map((p) => p.selected_variant_id)))
@@ -156,27 +157,27 @@ export async function refreshProjectThumbnailFromDb(
   const variants: Record<string, FurnitureVariant[]> = {}
 
   if (itemIds.length > 0) {
-    const { data: itemRows } = await supabase
-      .from('furniture_items')
-      .select('*')
-      .in('id', itemIds)
-    for (const it of (itemRows ?? []) as FurnitureItem[]) items[it.id] = it
+    const { data: itemRows } = await rawSelect<FurnitureItem>(
+      'furniture_items',
+      `id=in.(${itemIds.join(',')})`,
+    )
+    for (const it of itemRows ?? []) items[it.id] = it
   }
 
   if (variantIds.length > 0) {
-    const { data: variantRows } = await supabase
-      .from('furniture_variants')
-      .select('*')
-      .in('id', variantIds)
-    for (const v of (variantRows ?? []) as FurnitureVariant[]) {
+    const { data: variantRows } = await rawSelect<FurnitureVariant>(
+      'furniture_variants',
+      `id=in.(${variantIds.join(',')})`,
+    )
+    for (const v of variantRows ?? []) {
       const arr = variants[v.furniture_item_id] ?? []
       arr.push(v)
       variants[v.furniture_item_id] = arr
     }
   }
 
-  const { data: finishRows } = await supabase.from('finish_materials').select('*')
-  const finishMaterials = (finishRows ?? []) as FinishMaterial[]
+  const { data: finishRows } = await rawSelect<FinishMaterial>('finish_materials', '')
+  const finishMaterials = finishRows ?? []
 
   const { path, error } = await saveProjectThumbnail(projectId, {
     room: primary,

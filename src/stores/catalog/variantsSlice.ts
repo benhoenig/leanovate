@@ -1,5 +1,5 @@
 import type { FurnitureVariant } from '@/types'
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate, rawSelect } from '@/lib/supabase'
+import { SUPABASE_URL, SUPABASE_ANON_KEY, getAuthToken, rawInsert, rawUpdate, rawSelect } from '@/lib/supabase'
 import type { VariantsSlice, CatalogSliceCreator } from './types'
 import { runRenderPipeline } from './pipeline'
 
@@ -8,16 +8,19 @@ export const createVariantsSlice: CatalogSliceCreator<VariantsSlice> = (set, get
   isLoadingVariants: false,
 
   loadVariantsForItem: async (itemId) => {
+    // rawSelect — EditorPage fires this in a for-loop across every placed
+    // item at mount, concurrently with loadItems + loadCategories + loadStyles
+    // from CatalogPanel. Supabase JS client can't serialize that many
+    // parallel calls without silently deadlocking one (CLAUDE.md #8).
     set({ isLoadingVariants: true })
     try {
-      const { data, error } = await supabase
-        .from('furniture_variants')
-        .select('*')
-        .eq('furniture_item_id', itemId)
-        .order('sort_order', { ascending: true })
-      if (error) throw error
+      const { data, error } = await rawSelect<FurnitureVariant>(
+        'furniture_variants',
+        `furniture_item_id=eq.${itemId}&order=sort_order.asc`,
+      )
+      if (error) throw new Error(error)
       set((state) => ({
-        variants: { ...state.variants, [itemId]: data as FurnitureVariant[] },
+        variants: { ...state.variants, [itemId]: data ?? [] },
       }))
     } catch (err) {
       console.error('loadVariantsForItem:', err)

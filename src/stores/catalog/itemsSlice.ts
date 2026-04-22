@@ -1,10 +1,10 @@
 import type { FurnitureItem, ItemStatus } from '@/types'
 import {
-  supabase,
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
   getAuthToken,
   rawInsert,
+  rawSelect,
   rawUpdate,
   rawDelete,
 } from '@/lib/supabase'
@@ -19,24 +19,24 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
   showHidden: false,
 
   loadItems: async (filter) => {
+    // rawSelect (raw fetch) instead of supabase.from() — see CLAUDE.md #8.
+    // This method fires concurrently with loadCategories, loadStyles, and a
+    // fan-out of loadVariantsForItem when the editor mounts; the supabase
+    // JS client can't serialize that many parallel calls without one of
+    // them silently deadlocking.
     set({ isLoading: true })
     try {
       const profile = useAuthStore.getState().profile
-
-      let query = supabase
-        .from('furniture_items')
-        .select('*')
-        .order('created_at', { ascending: false })
-
+      const parts: string[] = []
       if (filter?.status) {
-        query = query.eq('status', filter.status)
+        parts.push(`status=eq.${filter.status}`)
       } else if (profile?.role !== 'admin') {
-        query = query.or(`submitted_by.eq.${profile?.id ?? ''},status.eq.approved`)
+        parts.push(`or=(submitted_by.eq.${profile?.id ?? ''},status.eq.approved)`)
       }
-
-      const { data, error } = await query
-      if (error) throw error
-      set({ items: data as FurnitureItem[] })
+      parts.push('order=created_at.desc')
+      const { data, error } = await rawSelect<FurnitureItem>('furniture_items', parts.join('&'))
+      if (error) throw new Error(error)
+      set({ items: data ?? [] })
     } catch (err) {
       console.error('loadItems:', err)
     } finally {
