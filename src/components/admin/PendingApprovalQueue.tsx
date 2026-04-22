@@ -86,14 +86,23 @@ export default function PendingApprovalQueue() {
 
   useEffect(() => { loadPending() }, [])
 
+  // After an approve/reject the store already applies an optimistic local
+  // update. But if the admin landed on /admin without ever opening the
+  // editor, `useCatalogStore.items` may be empty — the optimistic map()
+  // then silently no-ops, leaving downstream surfaces (CatalogOverview,
+  // editor's CatalogPanel on next mount) to load stale data. We also
+  // force-reload here so the store is guaranteed hydrated with the new
+  // status. Safe on /admin because CatalogPanel isn't mounted (no polling).
   const handleApprove = async (itemId: string) => {
     await approveItem(itemId)
     setPendingItems((prev) => prev.filter((p) => p.item.id !== itemId))
+    void useCatalogStore.getState().loadItems()
   }
 
   const handleReject = async (itemId: string) => {
     await rejectItem(itemId)
     setPendingItems((prev) => prev.filter((p) => p.item.id !== itemId))
+    void useCatalogStore.getState().loadItems()
   }
 
   const statusDot = (status: string) => {

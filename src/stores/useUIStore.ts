@@ -4,6 +4,7 @@ import i18n, { type Language, SUPPORTED_LANGUAGES } from '@/lib/i18n'
 export type SidebarTab = 'rooms' | 'finishes' | 'catalog' | 'fixtures' | 'templates'
 type RightPanelTab = 'properties' | 'cost'
 export type CameraMode = 'design' | 'roam'
+export type AdminTab = 'pending' | 'catalog' | 'link-health' | 'team' | 'ai-usage'
 
 const CANVAS_GRID_LS_KEY = 'leanovate.canvasGrid'
 const STUDIO_LIGHTS_LS_KEY = 'leanovate.studioLights'
@@ -56,6 +57,22 @@ interface UIState {
   cameraMode: CameraMode
   setCameraMode: (mode: CameraMode) => void
 
+  // Admin page active tab. Session-local so it survives incidental remounts
+  // of AdminPage (e.g. auth-store profile refresh → ProtectedRoute re-eval).
+  // Without this, local useState('pending') would reset every time the
+  // route wrapper re-renders, snapping the user back to Pending.
+  adminTab: AdminTab
+  setAdminTab: (tab: AdminTab) => void
+
+  // Shuffle / regenerate price filter — applies to both per-item
+  // "Shuffle this" and whole-room "Regenerate." Session-local (not
+  // persisted) — designers set a budget per presentation flow and
+  // it resets on reload.
+  shufflePriceCapEnabled: boolean
+  shufflePriceCap: number       // baht per item
+  setShufflePriceCapEnabled: (on: boolean) => void
+  setShufflePriceCap: (baht: number) => void
+
   // Language (persisted to localStorage via i18next detector)
   language: Language
   setLanguage: (lang: Language) => void
@@ -93,6 +110,14 @@ export const useUIStore = create<UIState>((set) => ({
   // Session-local — no need to persist across tabs. Always starts in design.
   cameraMode: 'design',
   setCameraMode: (mode) => set({ cameraMode: mode }),
+
+  adminTab: 'pending',
+  setAdminTab: (tab) => set({ adminTab: tab }),
+
+  shufflePriceCapEnabled: false,
+  shufflePriceCap: 20000,
+  setShufflePriceCapEnabled: (on) => set({ shufflePriceCapEnabled: on }),
+  setShufflePriceCap: (baht) => set({ shufflePriceCap: Math.max(0, baht) }),
 
   language: readInitialLanguage(),
   setLanguage: (lang) => {

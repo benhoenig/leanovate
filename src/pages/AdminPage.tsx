@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Boxes, ArrowLeft, ClipboardCheck, Package, Link2, Users, Cpu } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useUIStore, type AdminTab } from '@/stores/useUIStore'
 import PendingApprovalQueue from '@/components/admin/PendingApprovalQueue'
 import CatalogOverview from '@/components/admin/CatalogOverview'
 import LinkHealthOverview from '@/components/admin/LinkHealthOverview'
@@ -10,13 +10,12 @@ import TeamManagement from '@/components/admin/TeamManagement'
 import AIUsageOverview from '@/components/admin/AIUsageOverview'
 import LanguageToggle from '@/components/LanguageToggle'
 
-type AdminTab = 'pending' | 'catalog' | 'link-health' | 'team' | 'ai-usage'
-
 export default function AdminPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
   const { profile } = useAuthStore()
-  const [activeTab, setActiveTab] = useState<AdminTab>('pending')
+  const activeTab = useUIStore((s) => s.adminTab)
+  const setActiveTab = useUIStore((s) => s.setAdminTab)
 
   const tabs: { value: AdminTab; label: string; icon: React.ReactNode }[] = [
     { value: 'pending', label: t('admin.tabPending'), icon: <ClipboardCheck size={15} /> },

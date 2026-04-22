@@ -126,30 +126,41 @@ export const createItemsSlice: CatalogSliceCreator<ItemsSlice> = (set, get) => (
 
   approveItem: async (itemId) => {
     const profile = useAuthStore.getState().profile
+    const reviewed_at = new Date().toISOString()
+    const reviewed_by = profile?.id ?? null
     const { error } = await rawUpdate('furniture_items', itemId, {
       status: 'approved',
-      reviewed_by: profile?.id ?? null,
-      reviewed_at: new Date().toISOString(),
+      reviewed_by,
+      reviewed_at,
     })
     if (error) { console.error('approveItem:', error); return }
+    // Optimistic local update — propagates status + reviewer fields to any
+    // subscribers (CatalogPanel in the editor, CatalogOverview in admin)
+    // without needing a full `loadItems` re-fetch.
     set((state) => ({
       items: state.items.map((i) =>
-        i.id === itemId ? { ...i, status: 'approved' as ItemStatus } : i
+        i.id === itemId
+          ? { ...i, status: 'approved' as ItemStatus, reviewed_by, reviewed_at }
+          : i
       ),
     }))
   },
 
   rejectItem: async (itemId) => {
     const profile = useAuthStore.getState().profile
+    const reviewed_at = new Date().toISOString()
+    const reviewed_by = profile?.id ?? null
     const { error } = await rawUpdate('furniture_items', itemId, {
       status: 'rejected',
-      reviewed_by: profile?.id ?? null,
-      reviewed_at: new Date().toISOString(),
+      reviewed_by,
+      reviewed_at,
     })
     if (error) { console.error('rejectItem:', error); return }
     set((state) => ({
       items: state.items.map((i) =>
-        i.id === itemId ? { ...i, status: 'rejected' as ItemStatus } : i
+        i.id === itemId
+          ? { ...i, status: 'rejected' as ItemStatus, reviewed_by, reviewed_at }
+          : i
       ),
     }))
   },

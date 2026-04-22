@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, Package, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Box } from 'lucide-react'
 import { supabase, rawUpdate } from '@/lib/supabase'
+import { useCatalogStore } from '@/stores/useCatalogStore'
 import AdminListSkeleton from './AdminListSkeleton'
 import type { FurnitureItem, FurnitureCategory, FurnitureVariant, ItemStatus } from '@/types'
 
@@ -106,6 +107,22 @@ export default function CatalogOverview() {
       setIsLoading(false)
     }
     load()
+  }, [])
+
+  // Stay in sync with the catalog store. PendingApprovalQueue's approve/reject
+  // actions call `approveItem` / `rejectItem` which optimistically update
+  // `useCatalogStore.items` and then `loadItems()`. Without this subscription
+  // we'd keep showing the stale item rows loaded on mount until the component
+  // itself re-mounted (e.g. tab switch).
+  useEffect(() => {
+    return useCatalogStore.subscribe((s, prev) => {
+      if (s.items === prev.items) return
+      setItems((local) => {
+        if (local.length === 0) return s.items
+        const byId = new Map(s.items.map((i) => [i.id, i]))
+        return local.map((i) => byId.get(i.id) ?? i)
+      })
+    })
   }, [])
 
   const catMap = new Map(categories.map((c) => [c.id, c.name]))
