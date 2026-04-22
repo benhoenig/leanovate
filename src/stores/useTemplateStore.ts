@@ -11,6 +11,51 @@ import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 
+// ── Shuffle / regenerate filter contract ────────────────────────────────────
+
+export interface ShuffleFilters {
+  /**
+   * Optional per-item price cap. When set, a candidate variant is only
+   * eligible if its `price_thb <= maxPricePerItem`. Null-priced variants
+   * are included iff `includeNullPrice` (matches the "unknown price"
+   * toggle intent — designers often want to keep them in the pool).
+   */
+  maxPricePerItem?: number
+  includeNullPrice?: boolean
+}
+
+/**
+ * Effective block size for an item: item.block_size_override ?? category.default_block_size.
+ * Returned as 'big' | 'small'. Falls back to 'big' if neither is set (defensive).
+ */
+function effectiveBlockSizeForItem(
+  item: { id: string; category_id: string; block_size_override: 'big' | 'small' | null },
+  categories: { id: string; default_block_size: 'big' | 'small' }[],
+): 'big' | 'small' {
+  if (item.block_size_override) return item.block_size_override
+  const cat = categories.find((c) => c.id === item.category_id)
+  return cat?.default_block_size ?? 'big'
+}
+
+/**
+ * Pick a random approved variant from `variants` that matches the price
+ * filter. Returns null when no eligible variant exists.
+ */
+function pickVariantForItem<V extends { price_thb: number | null; render_approval_status?: string }>(
+  variants: V[],
+  filters: ShuffleFilters | undefined,
+): V | null {
+  const eligible = variants.filter((v) => {
+    if (filters?.maxPricePerItem != null) {
+      if (v.price_thb == null) return !!filters.includeNullPrice
+      if (v.price_thb > filters.maxPricePerItem) return false
+    }
+    return true
+  })
+  if (eligible.length === 0) return null
+  return eligible[Math.floor(Math.random() * eligible.length)]
+}
+
 interface TemplateState {
   unitTemplates: UnitLayoutTemplate[]
   furnitureTemplates: FurnitureLayoutTemplate[]
@@ -34,8 +79,27 @@ interface TemplateState {
   applyFurnitureTemplate: (templateId: string) => Promise<{ error: string | null }>
   applyStyleTemplate: (templateId: string, force?: boolean) => Promise<{ alerts: StalenessAlert[]; error: string | null }>
 
-  // Regenerate
-  regenerateStyle: (styleId: string) => Promise<{ error: string | null }>
+  // Regenerate / shuffle
+  /**
+   * Whole-room redesign: re-rolls every placed item with a new random pick
+   * from the (category × style × block size [× price cap]) pool. Returns
+   * per-slot match counts so the UI can surface a "shuffled N of M" toast
+   * and never silently removes a placed item whose slot has no matches.
+   */
+  regenerateStyle: (
+    styleId: string,
+    filters?: ShuffleFilters,
+  ) => Promise<{ error: string | null; swapped: number; skipped: number; total: number }>
+  /**
+   * Per-item shuffle — same filters, but scoped to one placed item. Keeps
+   * position / rotation / scale; writes a new variant + price_at_placement.
+   * Returns `swapped: false` + a reason if no alternates match.
+   */
+  shuffleSlot: (
+    placedId: string,
+    styleId: string | null,
+    filters?: ShuffleFilters,
+  ) => Promise<{ swapped: boolean; reason?: 'no-matches' | 'pool-size-1' | 'not-found' }>
 
   // Admin
   promoteTemplate: (type: 'unit' | 'furniture' | 'style', templateId: string) => Promise<void>
@@ -352,67 +416,155 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
   // ─── Regenerate ───────────────────────────────────────────────────────────
 
-  regenerateStyle: async (styleId) => {
+  regenerateStyle: async (styleId, filters) => {
     const { rooms } = useProjectStore.getState()
     const catalogState = useCatalogStore.getState()
     const selectedRoomId = useProjectStore.getState().selectedRoomId
 
-    if (!selectedRoomId || rooms.length === 0) return { error: 'No room selected' }
+    if (!selectedRoomId || rooms.length === 0) {
+      return { error: 'No room selected', swapped: 0, skipped: 0, total: 0 }
+    }
 
-    // Get all placed furniture to know what categories are on canvas
     const { placedFurniture } = useCanvasStore.getState()
-    if (placedFurniture.length === 0) return { error: 'No furniture to regenerate' }
+    if (placedFurniture.length === 0) {
+      return { error: 'No furniture to regenerate', swapped: 0, skipped: 0, total: 0 }
+    }
 
-    // Gather category slots from current placement
-    const slots = placedFurniture.map((pf) => {
-      const item = catalogState.items.find((i) => i.id === pf.furniture_item_id)
-      return {
-        category_id: item?.category_id ?? '',
-        room_id: pf.room_id,
-        x_cm: pf.x_cm,
-        z_cm: pf.z_cm,
-        rotation_deg: pf.rotation_deg,
-      }
-    })
+    const roomPlaced = placedFurniture.filter((p) => p.room_id === selectedRoomId)
 
-    // Find items tagged with this style for each category
-    const items: Array<{ roomId: string; furnitureItemId: string; variantId: string; x_cm: number; z_cm: number; rotation_deg: number }> = []
+    // Build a list of picks per slot. Slots whose pool is empty are left
+    // intact (the existing placement stays) and counted as skipped.
+    const picks: Array<{
+      roomId: string; furnitureItemId: string; variantId: string
+      x_cm: number; z_cm: number; rotation_deg: number
+    }> = []
+    const keepInstanceIds: string[] = []
+    let skipped = 0
 
-    for (const slot of slots) {
-      const matchingItems = catalogState.items.filter((i) => {
-        if (i.status !== 'approved' || i.category_id !== slot.category_id) return false
-        const itemStyles = catalogState.itemStyles[i.id] ?? []
-        return itemStyles.includes(styleId)
+    for (const pf of roomPlaced) {
+      const sourceItem = catalogState.items.find((i) => i.id === pf.furniture_item_id)
+      if (!sourceItem) { skipped++; continue }
+      const slotBlockSize = effectiveBlockSizeForItem(sourceItem, catalogState.categories)
+
+      // Pool = approved items in same category × tagged with styleId × same effective block size.
+      const poolItems = catalogState.items.filter((i) => {
+        if (i.status !== 'approved') return false
+        if (i.category_id !== sourceItem.category_id) return false
+        if (effectiveBlockSizeForItem(i, catalogState.categories) !== slotBlockSize) return false
+        const tags = catalogState.itemStyles[i.id] ?? []
+        return tags.includes(styleId)
       })
 
-      if (matchingItems.length === 0) {
-        // Fallback: any approved item in this category
-        const fallbacks = catalogState.items.filter(
-          (i) => i.status === 'approved' && i.category_id === slot.category_id
-        )
-        if (fallbacks.length === 0) continue
-        const pick = fallbacks[Math.floor(Math.random() * fallbacks.length)]
-        const variants = catalogState.getVariantsForItem(pick.id)
-        if (variants.length === 0) continue
-        const variant = variants[Math.floor(Math.random() * variants.length)]
-        items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x_cm: slot.x_cm, z_cm: slot.z_cm, rotation_deg: slot.rotation_deg })
+      // For each candidate item, try to pick a variant that passes the price
+      // filter. Items with no eligible variant are dropped from the pool.
+      const candidates: Array<{ itemId: string; variantId: string }> = []
+      for (const it of poolItems) {
+        const vs = catalogState.getVariantsForItem(it.id)
+        const picked = pickVariantForItem(vs, filters)
+        if (picked) candidates.push({ itemId: it.id, variantId: picked.id })
+      }
+
+      if (candidates.length === 0) {
+        // Keep the existing placement; don't silently remove it.
+        keepInstanceIds.push(pf.id)
+        skipped++
         continue
       }
 
-      const pick = matchingItems[Math.floor(Math.random() * matchingItems.length)]
-      const variants = catalogState.getVariantsForItem(pick.id)
-      if (variants.length === 0) continue
-      const variant = variants[Math.floor(Math.random() * variants.length)]
-      items.push({ roomId: slot.room_id, furnitureItemId: pick.id, variantId: variant.id, x_cm: slot.x_cm, z_cm: slot.z_cm, rotation_deg: slot.rotation_deg })
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)]
+      picks.push({
+        roomId: pf.room_id,
+        furnitureItemId: chosen.itemId,
+        variantId: chosen.variantId,
+        x_cm: pf.x_cm,
+        z_cm: pf.z_cm,
+        rotation_deg: pf.rotation_deg,
+      })
     }
 
-    // Clear current furniture and place new picks
-    await useCanvasStore.getState().clearRoomFurniture(selectedRoomId)
-    if (items.length > 0) {
-      await useCanvasStore.getState().placeItems(items)
+    // Remove only the furniture we have replacements for, then place picks.
+    // Items with no pool match stay where they were.
+    const canvasStore = useCanvasStore.getState()
+    const toRemove = roomPlaced
+      .map((pf) => pf.id)
+      .filter((id) => !keepInstanceIds.includes(id))
+    for (const id of toRemove) {
+      await canvasStore.removeItem(id)
+    }
+    if (picks.length > 0) await canvasStore.placeItems(picks)
+
+    return {
+      error: null,
+      swapped: picks.length,
+      skipped,
+      total: roomPlaced.length,
+    }
+  },
+
+  shuffleSlot: async (placedId, styleId, filters) => {
+    const catalogState = useCatalogStore.getState()
+    const canvasStore = useCanvasStore.getState()
+    const placed = canvasStore.placedFurniture.find((p) => p.id === placedId)
+    if (!placed) return { swapped: false, reason: 'not-found' }
+    const sourceItem = catalogState.items.find((i) => i.id === placed.furniture_item_id)
+    if (!sourceItem) return { swapped: false, reason: 'not-found' }
+
+    const slotBlockSize = effectiveBlockSizeForItem(sourceItem, catalogState.categories)
+
+    // Pool = approved items in same category × same effective block size ×
+    // tagged with styleId (if provided — otherwise any style).
+    const poolItems = catalogState.items.filter((i) => {
+      if (i.status !== 'approved') return false
+      if (i.category_id !== sourceItem.category_id) return false
+      if (effectiveBlockSizeForItem(i, catalogState.categories) !== slotBlockSize) return false
+      if (styleId) {
+        const tags = catalogState.itemStyles[i.id] ?? []
+        if (!tags.includes(styleId)) return false
+      }
+      return true
+    })
+
+    // Filter to (item, variant) pairs that satisfy the price cap, and
+    // exclude the currently-selected variant so a shuffle always produces a
+    // different result when possible.
+    const candidates: Array<{ itemId: string; variantId: string; price: number | null }> = []
+    for (const it of poolItems) {
+      const vs = catalogState.getVariantsForItem(it.id)
+      for (const v of vs) {
+        if (v.id === placed.selected_variant_id) continue
+        if (filters?.maxPricePerItem != null) {
+          if (v.price_thb == null && !filters.includeNullPrice) continue
+          if (v.price_thb != null && v.price_thb > filters.maxPricePerItem) continue
+        }
+        candidates.push({ itemId: it.id, variantId: v.id, price: v.price_thb })
+      }
     }
 
-    return { error: null }
+    if (candidates.length === 0) {
+      // Distinguish "only the current item fits" from "nothing fits" so the
+      // UI can show a helpful message.
+      const poolSize = poolItems.length
+      return {
+        swapped: false,
+        reason: poolSize <= 1 ? 'pool-size-1' : 'no-matches',
+      }
+    }
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)]
+
+    // Simplest implementation: remove the old placement and place a fresh
+    // one at the same coordinates. Preserves x/z/rotation; price_at_placement
+    // takes the new variant's current price.
+    await canvasStore.removeItem(placed.id)
+    await canvasStore.placeItems([{
+      roomId: placed.room_id,
+      furnitureItemId: chosen.itemId,
+      variantId: chosen.variantId,
+      x_cm: placed.x_cm,
+      z_cm: placed.z_cm,
+      rotation_deg: placed.rotation_deg,
+    }])
+    return { swapped: true }
   },
 
   // ─── Admin ────────────────────────────────────────────────────────────────

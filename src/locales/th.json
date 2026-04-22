@@ -248,7 +248,13 @@
       "removeArt": "ลบภาพ",
       "noArt": "ยังไม่มีภาพ — กรอบว่างอยู่",
       "artScopePrivate": "ส่วนตัว",
-      "artScopeTeam": "ทีม"
+      "artScopeTeam": "ทีม",
+      "shuffleAction": "สุ่มเปลี่ยนชิ้นนี้",
+      "shuffleTitle": "สลับชิ้นนี้เป็นอีกทางเลือกในหมวดและขนาดเดียวกัน",
+      "shuffleSuccess": "สุ่มแล้ว",
+      "shuffleNoMatches": "ไม่มีตัวเลือกอื่นตรงกับตัวกรอง — ลองขยายสไตล์หรือราคา",
+      "shufflePoolOne": "ไม่มีชิ้นอื่นที่ตรง — เพิ่มสินค้าในหมวด/ขนาดนี้เพื่อเปลี่ยน",
+      "shuffleUnavailable": "ไม่สามารถสุ่มชิ้นนี้ได้"
     },
     "cost": {
       "grandTotal": "รวมทั้งหมด",
@@ -564,6 +570,10 @@
     "furnitureLayoutApplied": "ใช้ผังเฟอร์นิเจอร์แล้ว",
     "designStyleApplied": "ใช้สไตล์ดีไซน์แล้ว",
     "furnitureRegenerated": "สุ่มเฟอร์นิเจอร์ใหม่แล้ว",
+    "regeneratePartial": "สุ่มแล้ว {{swapped}} จาก {{total}} — {{skipped}} ช่องไม่มีตัวเลือก",
+    "regenerateNoMatches": "ไม่มีตัวเลือกตรงกับตัวกรอง — ลองขยายสไตล์หรือเพิ่มงบต่อชิ้น",
+    "priceCapLabel": "งบต่อชิ้น",
+    "priceCapHint": "ใช้กับทั้งสุ่มทั้งห้องและสุ่มชิ้นเดียวในแผงคุณสมบัติ",
     "badgeGlobalLabel": "ส่วนกลาง",
     "badgePersonalLabel": "ส่วนตัว",
     "promoteToGlobal": "เลื่อนเป็นส่วนกลาง",

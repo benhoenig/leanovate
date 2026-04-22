@@ -99,10 +99,27 @@ export default function TemplatePanel() {
 
   const handleRegenerate = async (styleId: string) => {
     setApplying(true)
-    const { error } = await regenerateStyle(styleId)
-    if (error) showToast(error, 'warning')
-    else showToast(t('templates.furnitureRegenerated'), 'success')
+    const uiState = useUIStore.getState()
+    const filters = uiState.shufflePriceCapEnabled
+      ? { maxPricePerItem: uiState.shufflePriceCap, includeNullPrice: true }
+      : undefined
+    const result = await regenerateStyle(styleId, filters)
     setApplying(false)
+    if (result.error) {
+      showToast(result.error, 'warning')
+      return
+    }
+    const { swapped, skipped, total } = result
+    if (swapped === 0 && total > 0) {
+      showToast(t('templates.regenerateNoMatches'), 'warning')
+    } else if (skipped > 0) {
+      showToast(
+        t('templates.regeneratePartial', { swapped, total, skipped }),
+        'warning',
+      )
+    } else {
+      showToast(t('templates.furnitureRegenerated'), 'success')
+    }
   }
 
   // ── Render template list ──────────────────────────────────────────────────
@@ -196,6 +213,10 @@ export default function TemplatePanel() {
         ))}
       </div>
 
+      {/* Shuffle price cap (style tab only) — applies to both Regenerate and
+          per-item "Shuffle this" in the right panel. Session-local. */}
+      {subTab === 'style' && <ShuffleFilterRow />}
+
       {/* Template list */}
       <div className="tp-list">
         {renderList()}
@@ -255,6 +276,47 @@ export default function TemplatePanel() {
   )
 }
 
+/**
+ * Budget-per-item toggle + baht input. Wires to useUIStore so the same
+ * filter applies to per-item "Shuffle this" in the right panel.
+ */
+function ShuffleFilterRow() {
+  const { t } = useTranslation()
+  const enabled = useUIStore((s) => s.shufflePriceCapEnabled)
+  const cap = useUIStore((s) => s.shufflePriceCap)
+  const setEnabled = useUIStore((s) => s.setShufflePriceCapEnabled)
+  const setCap = useUIStore((s) => s.setShufflePriceCap)
+
+  return (
+    <div className="tp-filter-row">
+      <label className="tp-filter-check">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+        />
+        <span>{t('templates.priceCapLabel')}</span>
+      </label>
+      <div className={`tp-filter-input-wrap ${enabled ? '' : 'disabled'}`}>
+        <span className="tp-filter-currency">฿</span>
+        <input
+          type="number"
+          className="tp-filter-input"
+          min={0}
+          step={500}
+          value={cap}
+          disabled={!enabled}
+          onChange={(e) => {
+            const v = parseInt(e.target.value, 10)
+            if (!isNaN(v)) setCap(v)
+          }}
+        />
+      </div>
+      <span className="tp-filter-hint">{t('templates.priceCapHint')}</span>
+    </div>
+  )
+}
+
 const templateStyle = `
   .template-panel {
     display: flex;
@@ -304,6 +366,63 @@ const templateStyle = `
     text-align: center;
     padding: 20px 0;
     opacity: 0.6;
+  }
+
+  .tp-filter-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border-custom);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tp-filter-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    user-select: none;
+  }
+  .tp-filter-check input {
+    cursor: pointer;
+  }
+  .tp-filter-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 6px;
+    border: 1px solid var(--color-border-custom);
+    border-radius: 6px;
+    background: var(--color-canvas-bg);
+  }
+  .tp-filter-input-wrap.disabled {
+    opacity: 0.5;
+  }
+  .tp-filter-currency {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+  }
+  .tp-filter-input {
+    width: 70px;
+    padding: 2px 4px;
+    border: none;
+    background: transparent;
+    font-size: 11px;
+    font-family: inherit;
+    color: var(--color-text-primary);
+    outline: none;
+  }
+  .tp-filter-input:disabled {
+    cursor: not-allowed;
+  }
+  .tp-filter-hint {
+    flex-basis: 100%;
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    opacity: 0.7;
   }
 
   .tp-card {

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCw, FlipHorizontal, Trash2, ExternalLink, ImageIcon } from 'lucide-react'
+import { RotateCw, FlipHorizontal, Trash2, ExternalLink, ImageIcon, Shuffle } from 'lucide-react'
 import { useCanvasStore } from '@/stores/useCanvasStore'
 import { useCatalogStore } from '@/stores/useCatalogStore'
 import { useArtStore } from '@/stores/useArtStore'
+import { useTemplateStore } from '@/stores/useTemplateStore'
+import { useUIStore } from '@/stores/useUIStore'
 import PlacementSection from './PlacementSection'
 import PlacedLightingSection from './PlacedLightingSection'
 import ArtPickerModal from '../ArtPickerModal'
@@ -264,10 +266,56 @@ export default function FurnitureProperties({ placed }: { placed: { id: string; 
         >
           <FlipHorizontal size={13} /> {t('editor.properties.flipAction')}
         </button>
+        <ShuffleThisButton placedId={placed.id} />
         <button className="fp-action-btn fp-action-btn--danger" onClick={() => removeItem(placed.id)}>
           <Trash2 size={13} /> {t('editor.properties.removeAction')}
         </button>
       </div>
     </>
+  )
+}
+
+/**
+ * Per-item shuffle: swaps this placed item for a random alternate that
+ * matches the same category × effective block size × (optional) price cap.
+ * Style scope is 'any' for v1 — if designers later ask for style-scoped
+ * shuffle, surface the applied-template's styleId and pass it through.
+ */
+function ShuffleThisButton({ placedId }: { placedId: string }) {
+  const { t } = useTranslation()
+  const shuffleSlot = useTemplateStore((s) => s.shuffleSlot)
+  const capEnabled = useUIStore((s) => s.shufflePriceCapEnabled)
+  const cap = useUIStore((s) => s.shufflePriceCap)
+  const showToast = useUIStore((s) => s.showToast)
+  const [busy, setBusy] = useState(false)
+
+  const handleClick = async () => {
+    if (busy) return
+    setBusy(true)
+    const filters = capEnabled
+      ? { maxPricePerItem: cap, includeNullPrice: true }
+      : undefined
+    const result = await shuffleSlot(placedId, null, filters)
+    setBusy(false)
+    if (result.swapped) {
+      showToast(t('editor.properties.shuffleSuccess'), 'success')
+    } else if (result.reason === 'pool-size-1') {
+      showToast(t('editor.properties.shufflePoolOne'), 'warning')
+    } else if (result.reason === 'no-matches') {
+      showToast(t('editor.properties.shuffleNoMatches'), 'warning')
+    } else {
+      showToast(t('editor.properties.shuffleUnavailable'), 'warning')
+    }
+  }
+
+  return (
+    <button
+      className="fp-action-btn"
+      onClick={handleClick}
+      disabled={busy}
+      title={t('editor.properties.shuffleTitle')}
+    >
+      <Shuffle size={13} /> {t('editor.properties.shuffleAction')}
+    </button>
   )
 }

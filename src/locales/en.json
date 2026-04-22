@@ -248,7 +248,13 @@
       "removeArt": "Remove art",
       "noArt": "No art — frame is empty.",
       "artScopePrivate": "Private",
-      "artScopeTeam": "Team"
+      "artScopeTeam": "Team",
+      "shuffleAction": "Shuffle this",
+      "shuffleTitle": "Swap this item for a random alternate in the same category + size",
+      "shuffleSuccess": "Shuffled",
+      "shuffleNoMatches": "No alternates match current filters — widen style or price",
+      "shufflePoolOne": "No other items match — add more in this category/size",
+      "shuffleUnavailable": "Shuffle unavailable for this item"
     },
     "cost": {
       "grandTotal": "Grand Total",
@@ -564,6 +570,10 @@
     "furnitureLayoutApplied": "Furniture layout applied",
     "designStyleApplied": "Design style applied",
     "furnitureRegenerated": "Furniture regenerated",
+    "regeneratePartial": "Shuffled {{swapped}} of {{total}} — {{skipped}} slots had no match",
+    "regenerateNoMatches": "No matches at current filters — try widening style or raising price cap",
+    "priceCapLabel": "Budget per item",
+    "priceCapHint": "Applies to Regenerate and per-item Shuffle",
     "badgeGlobalLabel": "Global",
     "badgePersonalLabel": "Personal",
     "promoteToGlobal": "Promote to global",
