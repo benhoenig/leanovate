@@ -431,14 +431,12 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
     }
 
     const roomPlaced = placedFurniture.filter((p) => p.room_id === selectedRoomId)
+    const canvasStore = useCanvasStore.getState()
 
-    // Build a list of picks per slot. Slots whose pool is empty are left
-    // intact (the existing placement stays) and counted as skipped.
-    const picks: Array<{
-      roomId: string; furnitureItemId: string; variantId: string
-      x_cm: number; z_cm: number; rotation_deg: number
-    }> = []
-    const keepInstanceIds: string[] = []
+    // Swap each slot in place via swapItem — preserves position/rotation,
+    // pushes one undo command per slot so the designer can Ctrl-Z
+    // progressively. Slots whose pool is empty are left intact.
+    let swapped = 0
     let skipped = 0
 
     for (const pf of roomPlaced) {
@@ -457,45 +455,26 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
       // For each candidate item, try to pick a variant that passes the price
       // filter. Items with no eligible variant are dropped from the pool.
-      const candidates: Array<{ itemId: string; variantId: string }> = []
+      const candidates: Array<{ itemId: string; variantId: string; price: number | null }> = []
       for (const it of poolItems) {
         const vs = catalogState.getVariantsForItem(it.id)
         const picked = pickVariantForItem(vs, filters)
-        if (picked) candidates.push({ itemId: it.id, variantId: picked.id })
+        if (picked) candidates.push({ itemId: it.id, variantId: picked.id, price: picked.price_thb })
       }
 
       if (candidates.length === 0) {
-        // Keep the existing placement; don't silently remove it.
-        keepInstanceIds.push(pf.id)
         skipped++
         continue
       }
 
       const chosen = candidates[Math.floor(Math.random() * candidates.length)]
-      picks.push({
-        roomId: pf.room_id,
-        furnitureItemId: chosen.itemId,
-        variantId: chosen.variantId,
-        x_cm: pf.x_cm,
-        z_cm: pf.z_cm,
-        rotation_deg: pf.rotation_deg,
-      })
+      canvasStore.swapItem(pf.id, chosen.itemId, chosen.variantId, chosen.price)
+      swapped++
     }
-
-    // Remove only the furniture we have replacements for, then place picks.
-    // Items with no pool match stay where they were.
-    const canvasStore = useCanvasStore.getState()
-    const toRemove = roomPlaced
-      .map((pf) => pf.id)
-      .filter((id) => !keepInstanceIds.includes(id))
-    for (const id of toRemove) {
-      await canvasStore.removeItem(id)
-    }
-    if (picks.length > 0) await canvasStore.placeItems(picks)
 
     return {
       error: null,
-      swapped: picks.length,
+      swapped,
       skipped,
       total: roomPlaced.length,
     }
@@ -552,18 +531,11 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
     const chosen = candidates[Math.floor(Math.random() * candidates.length)]
 
-    // Simplest implementation: remove the old placement and place a fresh
-    // one at the same coordinates. Preserves x/z/rotation; price_at_placement
-    // takes the new variant's current price.
-    await canvasStore.removeItem(placed.id)
-    await canvasStore.placeItems([{
-      roomId: placed.room_id,
-      furnitureItemId: chosen.itemId,
-      variantId: chosen.variantId,
-      x_cm: placed.x_cm,
-      z_cm: placed.z_cm,
-      rotation_deg: placed.rotation_deg,
-    }])
+    // Swap in place — updates furniture_item_id / selected_variant_id /
+    // price_at_placement on the existing placed_furniture row in one DB
+    // write, keeps the selection alive, and pushes a single undo command
+    // so Ctrl-Z reverses the whole shuffle atomically.
+    canvasStore.swapItem(placed.id, chosen.itemId, chosen.variantId, chosen.price)
     return { swapped: true }
   },
 

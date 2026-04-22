@@ -13,9 +13,25 @@ interface RotateCommand { type: 'rotate'; itemId: string; prevRotationDeg: numbe
 interface ScaleCommand { type: 'scale'; itemId: string; prevScale: number; nextScale: number }
 interface MirrorCommand { type: 'mirror'; itemId: string; prevMirrored: boolean; nextMirrored: boolean }
 interface SwitchVariantCommand { type: 'switchVariant'; itemId: string; prevVariantId: string; prevPrice: number | null; nextVariantId: string; nextPrice: number | null }
+/**
+ * Swap the whole furniture item (not just the variant) in place — used by
+ * per-item Shuffle in the template store. Single DB write on the existing
+ * placed_furniture row; undo/redo restore prev/next item+variant+price
+ * atomically so the designer can back out of an unwanted shuffle.
+ */
+interface SwapItemCommand {
+  type: 'swapItem'
+  itemId: string
+  prevFurnitureItemId: string
+  prevVariantId: string
+  prevPrice: number | null
+  nextFurnitureItemId: string
+  nextVariantId: string
+  nextPrice: number | null
+}
 interface GeometryCommand { type: 'geometry'; roomId: string; prevGeometry: RoomGeometry; nextGeometry: RoomGeometry; prevWidthCm: number; prevHeightCm: number; nextWidthCm: number; nextHeightCm: number }
 
-type CanvasCommand = PlaceCommand | RemoveCommand | MoveCommand | RotateCommand | ScaleCommand | MirrorCommand | SwitchVariantCommand | GeometryCommand
+type CanvasCommand = PlaceCommand | RemoveCommand | MoveCommand | RotateCommand | ScaleCommand | MirrorCommand | SwitchVariantCommand | SwapItemCommand | GeometryCommand
 
 const MAX_HISTORY = 50
 
@@ -92,6 +108,13 @@ interface CanvasState {
   /** Update per-instance light settings for a placed fixture (ceiling downlight / lamp). */
   updateLightSettings: (id: string, patch: Partial<PlacedLightSettings>) => void
   switchVariant: (id: string, variantId: string, price: number | null) => void
+  /**
+   * Swap an entire placed item for a different furniture item (different
+   * parent, not just a colour variant). Preserves position / rotation /
+   * scale and the selection. Pushes a single undo command so the whole
+   * swap reverses in one step.
+   */
+  swapItem: (id: string, nextFurnitureItemId: string, nextVariantId: string, nextPrice: number | null) => void
   /** Set the art image on a placed picture frame. Pass null to clear (empty frame). */
   setArt: (id: string, artId: string | null) => Promise<{ error: string | null }>
   removeItem: (id: string) => Promise<void>
@@ -417,6 +440,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     pushCommand(set, get, { type: 'switchVariant', itemId: id, prevVariantId, prevPrice, nextVariantId: variantId, nextPrice: price })
   },
 
+  swapItem: (id, nextFurnitureItemId, nextVariantId, nextPrice) => {
+    const item = get().placedFurniture.find((i) => i.id === id)
+    if (!item) return
+    const prevFurnitureItemId = item.furniture_item_id
+    const prevVariantId = item.selected_variant_id
+    const prevPrice = item.price_at_placement
+    set((state) => ({
+      placedFurniture: state.placedFurniture.map((i) =>
+        i.id === id
+          ? {
+              ...i,
+              furniture_item_id: nextFurnitureItemId,
+              selected_variant_id: nextVariantId,
+              price_at_placement: nextPrice,
+            }
+          : i,
+      ),
+    }))
+    rawUpdate('placed_furniture', id, {
+      furniture_item_id: nextFurnitureItemId,
+      selected_variant_id: nextVariantId,
+      price_at_placement: nextPrice,
+    }).then(({ error }) => {
+      if (error) console.error('swapItem DB:', error)
+    })
+    pushCommand(set, get, {
+      type: 'swapItem',
+      itemId: id,
+      prevFurnitureItemId,
+      prevVariantId,
+      prevPrice,
+      nextFurnitureItemId,
+      nextVariantId,
+      nextPrice,
+    })
+  },
+
   setArt: async (id, artId) => {
     const item = get().placedFurniture.find((i) => i.id === id)
     if (!item) return { error: null }
@@ -544,6 +604,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           rawUpdate('placed_furniture', cmd.itemId, { selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice }).then(({ error }) => { if (error) console.error('undo switchVariant DB:', error) })
           break
         }
+        case 'swapItem': {
+          set((s) => ({
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId
+              ? { ...i, furniture_item_id: cmd.prevFurnitureItemId, selected_variant_id: cmd.prevVariantId, price_at_placement: cmd.prevPrice }
+              : i,
+            ),
+          }))
+          rawUpdate('placed_furniture', cmd.itemId, {
+            furniture_item_id: cmd.prevFurnitureItemId,
+            selected_variant_id: cmd.prevVariantId,
+            price_at_placement: cmd.prevPrice,
+          }).then(({ error }) => { if (error) console.error('undo swapItem DB:', error) })
+          break
+        }
         case 'geometry': {
           useProjectStore.getState().updateRoom(cmd.roomId, {
             geometry: cmd.prevGeometry,
@@ -620,6 +694,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId ? { ...i, selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice } : i),
           }))
           rawUpdate('placed_furniture', cmd.itemId, { selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice }).then(({ error }) => { if (error) console.error('redo switchVariant DB:', error) })
+          break
+        }
+        case 'swapItem': {
+          set((s) => ({
+            placedFurniture: s.placedFurniture.map((i) => i.id === cmd.itemId
+              ? { ...i, furniture_item_id: cmd.nextFurnitureItemId, selected_variant_id: cmd.nextVariantId, price_at_placement: cmd.nextPrice }
+              : i,
+            ),
+          }))
+          rawUpdate('placed_furniture', cmd.itemId, {
+            furniture_item_id: cmd.nextFurnitureItemId,
+            selected_variant_id: cmd.nextVariantId,
+            price_at_placement: cmd.nextPrice,
+          }).then(({ error }) => { if (error) console.error('redo swapItem DB:', error) })
           break
         }
         case 'geometry': {
