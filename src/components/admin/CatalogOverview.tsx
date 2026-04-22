@@ -312,7 +312,12 @@ export default function CatalogOverview() {
                     )}
 
                     {/* Admin catalog-gate actions — shown on any non-approved
-                        item. Reject button hidden on already-rejected items. */}
+                        item. Reject button hidden on already-rejected items.
+                        The store actions (approveItem/rejectItem) write to DB
+                        + do their own optimistic update of useCatalogStore.items,
+                        but that store is empty on /admin (no CatalogPanel has
+                        loaded it), so we also patch local `items` here so the
+                        status badge flips immediately without a page reload. */}
                     {item.status !== 'approved' && (
                       <div className="catalog-approval-row">
                         <span className="catalog-approval-label">
@@ -320,7 +325,13 @@ export default function CatalogOverview() {
                         </span>
                         <button
                           className="catalog-approve-btn"
-                          onClick={(e) => { e.stopPropagation(); void approveItem(item.id) }}
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            await approveItem(item.id)
+                            setItems((prev) => prev.map((i) =>
+                              i.id === item.id ? { ...i, status: 'approved' as ItemStatus } : i,
+                            ))
+                          }}
                         >
                           <Check size={12} />
                           {t('admin.catalogOverview.approveItem')}
@@ -328,7 +339,13 @@ export default function CatalogOverview() {
                         {item.status !== 'rejected' && (
                           <button
                             className="catalog-reject-btn"
-                            onClick={(e) => { e.stopPropagation(); void rejectItem(item.id) }}
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              await rejectItem(item.id)
+                              setItems((prev) => prev.map((i) =>
+                                i.id === item.id ? { ...i, status: 'rejected' as ItemStatus } : i,
+                              ))
+                            }}
                           >
                             <X size={12} />
                             {t('admin.catalogOverview.rejectItem')}
