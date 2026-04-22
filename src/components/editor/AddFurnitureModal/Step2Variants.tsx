@@ -55,7 +55,8 @@ export default function Step2Variants(props: {
             </div>
             <div className="flat-banner-text">{t('addFurniture.flatBannerIntro')}</div>
             <ul className="flat-banner-list">
-              <li>{t('addFurniture.flatBannerRulePng')}</li>
+              <li>{t('addFurniture.flatBannerRuleCrop')}</li>
+              <li>{t('addFurniture.flatBannerRuleAlpha')}</li>
               <li>{t('addFurniture.flatBannerRuleTopDown')}</li>
               <li>{t('addFurniture.flatBannerRuleSingle')}</li>
             </ul>
