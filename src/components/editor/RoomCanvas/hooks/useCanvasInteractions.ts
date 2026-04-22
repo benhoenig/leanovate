@@ -146,8 +146,26 @@ export function useCanvasInteractions(
 
       const s = useCanvasStore.getState()
 
-      // Shape edit mode: handle vertex drag / midpoint insert / wall push-pull.
+      // Shape edit mode: vertex / wall edits use click-arm → hover-preview →
+      // click-release. The first click picks up a handle or wall; subsequent
+      // pointer moves (with no button held) follow the cursor; the next
+      // left-click commits. Camera controls stay live throughout — we
+      // deliberately do NOT pointer-capture or disable OrbitControls.
       if (s.shapeEditMode) {
+        // Second click → commit whatever's currently armed.
+        if (vertexDragRef.current) {
+          const vd = vertexDragRef.current
+          vertexDragRef.current = null
+          commitShapeEdit(room.id, vd.prevGeometry, vd.prevWidthCm, vd.prevHeightCm)
+          return
+        }
+        if (wallDragRef.current) {
+          const wd = wallDragRef.current
+          wallDragRef.current = null
+          commitShapeEdit(room.id, wd.prevGeometry, wd.prevWidthCm, wd.prevHeightCm)
+          return
+        }
+
         const hit = rcHandle(e.clientX, e.clientY)
         if (hit?.kind === 'vertex') {
           s.setSelectedVertex(hit.vertexIndex)
@@ -157,8 +175,6 @@ export function useCanvasInteractions(
             prevWidthCm: room.width_cm,
             prevHeightCm: room.height_cm,
           }
-          if (ctx.controlsRef.current) ctx.controlsRef.current.enabled = false
-          container.setPointerCapture(e.pointerId)
           return
         }
         if (hit?.kind === 'midpoint') {
@@ -197,8 +213,6 @@ export function useCanvasInteractions(
             prevHeightCm: room.height_cm,
           }
           s.setSelectedVertex(null)
-          if (ctx.controlsRef.current) ctx.controlsRef.current.enabled = false
-          container.setPointerCapture(e.pointerId)
           return
         }
 
@@ -298,28 +312,36 @@ export function useCanvasInteractions(
     }
 
     const onPointerMove = (e: PointerEvent) => {
-      // Hover cursor — grab/copy/move in shape edit
-      if (e.buttons === 0 && !vertexDragRef.current && !wallDragRef.current) {
-        const inShapeEdit = useCanvasStore.getState().shapeEditMode
-        if (inShapeEdit) {
-          const handleHover = rcHandle(e.clientX, e.clientY)
-          if (handleHover?.kind === 'vertex') {
-            container.style.cursor = 'grab'
-          } else if (handleHover?.kind === 'midpoint') {
-            container.style.cursor = 'copy'
-          } else if (rcWall(e.clientX, e.clientY) != null) {
-            container.style.cursor = 'move'
+      // Hover cursor — grab/copy/move in shape edit. When an edit is armed
+      // (click-arm-release flow), show `grabbing` so the user knows the
+      // next click will commit.
+      if (e.buttons === 0) {
+        if (vertexDragRef.current || wallDragRef.current) {
+          container.style.cursor = 'grabbing'
+        } else {
+          const inShapeEdit = useCanvasStore.getState().shapeEditMode
+          if (inShapeEdit) {
+            const handleHover = rcHandle(e.clientX, e.clientY)
+            if (handleHover?.kind === 'vertex') {
+              container.style.cursor = 'grab'
+            } else if (handleHover?.kind === 'midpoint') {
+              container.style.cursor = 'copy'
+            } else if (rcWall(e.clientX, e.clientY) != null) {
+              container.style.cursor = 'move'
+            } else {
+              container.style.cursor = ''
+            }
           } else {
             container.style.cursor = ''
           }
-        } else {
-          container.style.cursor = ''
         }
       }
 
-      // Vertex drag (shape edit mode)
+      // Vertex follow (shape edit mode — armed via click, follows cursor
+      // with no button held, committed on the next click). Skip while any
+      // button is held so left-drag falls through to OrbitControls.
       const vd = vertexDragRef.current
-      if (vd) {
+      if (vd && e.buttons === 0) {
         const hit = rcFloor(e.clientX, e.clientY)
         if (!hit) return
         const bypass = e.ctrlKey || e.metaKey
@@ -376,9 +398,11 @@ export function useCanvasInteractions(
         return
       }
 
-      // Wall push/pull drag (shape edit mode)
+      // Wall push/pull follow (shape edit mode — armed via click, commits
+      // on the next click). Skip while a button is held so left-drag falls
+      // through to OrbitControls.
       const wd = wallDragRef.current
-      if (wd) {
+      if (wd && e.buttons === 0) {
         const hit = rcFloor(e.clientX, e.clientY)
         if (!hit) return
         const midU = (wd.origA.u + wd.origB.u) / 2
@@ -474,23 +498,8 @@ export function useCanvasInteractions(
         container.releasePointerCapture(e.pointerId)
         useCanvasStore.getState().commitMove(drag.placedId, drag.prevX, drag.prevZ)
       }
-      // Commit vertex drag: persist to DB + push undo command
-      const vd = vertexDragRef.current
-      if (vd) {
-        vertexDragRef.current = null
-        if (ctx.controlsRef.current) ctx.controlsRef.current.enabled = true
-        container.releasePointerCapture(e.pointerId)
-        commitShapeEdit(room.id, vd.prevGeometry, vd.prevWidthCm, vd.prevHeightCm)
-      }
-
-      // Commit wall drag
-      const wd = wallDragRef.current
-      if (wd) {
-        wallDragRef.current = null
-        if (ctx.controlsRef.current) ctx.controlsRef.current.enabled = true
-        container.releasePointerCapture(e.pointerId)
-        commitShapeEdit(room.id, wd.prevGeometry, wd.prevWidthCm, wd.prevHeightCm)
-      }
+      // Vertex + wall edits are click-arm / click-release (see onPointerDown
+      // shape-edit branch) — no commit work here.
     }
 
     const onWheel = (e: WheelEvent) => {
@@ -541,8 +550,34 @@ export function useCanvasInteractions(
 
       const s = useCanvasStore.getState()
       if (e.key === 'Escape') {
-        // Cancel an in-progress fixture pickup first — restore pre-pickup
-        // geometry without persisting.
+        // Cancel an in-progress vertex / wall edit — restore the pre-arm
+        // geometry without persisting. Vertex edit takes priority since
+        // arming a vertex implicitly deselects any armed wall.
+        const vd = vertexDragRef.current
+        if (vd) {
+          useProjectStore.setState((state) => ({
+            rooms: state.rooms.map((r) =>
+              r.id === room.id
+                ? { ...r, geometry: vd.prevGeometry, width_cm: vd.prevWidthCm, height_cm: vd.prevHeightCm }
+                : r,
+            ),
+          }))
+          vertexDragRef.current = null
+          return
+        }
+        const wd = wallDragRef.current
+        if (wd) {
+          useProjectStore.setState((state) => ({
+            rooms: state.rooms.map((r) =>
+              r.id === room.id
+                ? { ...r, geometry: wd.prevGeometry, width_cm: wd.prevWidthCm, height_cm: wd.prevHeightCm }
+                : r,
+            ),
+          }))
+          wallDragRef.current = null
+          return
+        }
+        // Cancel an in-progress fixture pickup — restore pre-pickup geometry.
         const fm = fixtureMoveRef.current
         if (fm) {
           useProjectStore.setState((state) => ({

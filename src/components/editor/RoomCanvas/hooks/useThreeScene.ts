@@ -224,7 +224,14 @@ export function useThreeScene(room: Room): SceneContext {
 
       const cam = cameraRef.current
       const cont = containerRef.current
-      const room0 = useProjectStore.getState().rooms.find((r) => r.id === room.id)
+      // Read the *currently selected* room id from the project store, not
+      // the closure-captured `room` — the scene persists across room
+      // switches (useEffect deps are `[]`), so the closure's `room.id` is
+      // stuck on the first mounted room and would make labels look static.
+      const activeRoomId = useProjectStore.getState().selectedRoomId
+      const room0 = activeRoomId
+        ? useProjectStore.getState().rooms.find((r) => r.id === activeRoomId)
+        : undefined
       if (!cam || !cont || !room0) return
 
       const verts = getVertices(room0)
@@ -248,8 +255,8 @@ export function useThreeScene(room: Room): SceneContext {
         const b = verts[(i + 1) % N]
         const du = b.u - a.u, dv = b.v - a.v
         const lengthCm = Math.round(Math.hypot(du, dv) * 100)
-        // Anchor at the wall's top-edge midpoint so the label doesn't cover
-        // the midpoint handle on the floor (which adds a new vertex).
+        // Anchor at the wall's top edge midpoint — sits on top of the wall
+        // and tracks it as push/pull moves the midpoint.
         tmp.set((a.u + b.u) / 2, ceilingH, (a.v + b.v) / 2)
         tmp.project(cam)
         const el = layer.children[i] as HTMLDivElement
